@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, CheckCircle2, Loader2, Play, Plus, RefreshCw, Save, Search, Trash2, XCircle } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRightLeft, CheckCircle2, Copy, ExternalLink, KeyRound, Loader2, Play, Plus, RefreshCw, Save, Search, Trash2, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 
 type CollectionSite = {
@@ -90,6 +91,32 @@ type SiteForm = {
   tokenExpire: string;
 };
 
+type CredentialCaptureType = SiteForm["siteType"];
+
+type CredentialCaptureSession = {
+  nonce: string;
+  siteType: CredentialCaptureType;
+  origin: string;
+  baseUrl: string;
+  script: string;
+  pasteValue: string;
+  error: string;
+};
+
+type CredentialCapturePayload = {
+  source?: string;
+  nonce?: string;
+  siteType?: CredentialCaptureType;
+  access_token?: unknown;
+  refresh_token?: unknown;
+  token_expires_at?: unknown;
+  session?: unknown;
+  user_id?: unknown;
+  userid?: unknown;
+  new_api_user?: unknown;
+  error?: unknown;
+};
+
 const defaultForm: SiteForm = {
   name: "",
   baseUrl: "",
@@ -110,6 +137,7 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 50;
 const RATE_PAGE_SIZE_STORAGE_KEY = "s2a.blSync.ratePageSize";
 const CHANGE_PAGE_SIZE_STORAGE_KEY = "s2a.blSync.changePageSize";
+const CREDENTIAL_CAPTURE_SOURCE = "s2a-manager-bl-credential-capture";
 
 function finiteNumber(value: unknown) {
   if (value === null || value === undefined || value === "") return null;
@@ -226,6 +254,171 @@ function writeStoredPageSize(key: string, value: number) {
   window.localStorage.setItem(key, String(value));
 }
 
+function normalizeBaseUrl(value: string) {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function parseBaseUrl(value: string) {
+  const normalized = normalizeBaseUrl(value);
+  if (!/^https?:\/\//i.test(normalized)) return null;
+  try {
+    return new URL(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function randomNonce() {
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function stringifyValue(value: unknown) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") return String(value).trim();
+  return "";
+}
+
+function normalizeSessionValue(value: string) {
+  const session = value.trim();
+  if (!session) return "";
+  if (/^session\s*=/i.test(session)) return session.replace(/^session\s*=/i, "session=").trim();
+  if (/^session:/i.test(session) || /^cookie:/i.test(session) || session.includes("=")) return session;
+  return `session=${session}`;
+}
+
+function buildSub2ApiCredentialScript(nonce: string, targetOrigin: string) {
+  return `(() => {
+  const payload = {
+    source: ${JSON.stringify(CREDENTIAL_CAPTURE_SOURCE)},
+    nonce: ${JSON.stringify(nonce)},
+    siteType: "sub2api",
+    access_token: localStorage.getItem("auth_token") || "",
+    refresh_token: localStorage.getItem("refresh_token") || "",
+    token_expires_at: localStorage.getItem("token_expires_at") || ""
+  };
+  const output = JSON.stringify(payload, null, 2);
+  if (window.opener) {
+    window.opener.postMessage(payload, ${JSON.stringify(targetOrigin)});
+  }
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(output).catch(() => {});
+  }
+  console.log(output);
+  console.log(payload);
+})()`;
+}
+
+function buildNewApiCredentialScript(nonce: string, targetOrigin: string) {
+  return `(() => {
+  const source = ${JSON.stringify(CREDENTIAL_CAPTURE_SOURCE)};
+  const nonce = ${JSON.stringify(nonce)};
+  const targetOrigin = ${JSON.stringify(targetOrigin)};
+  const readStorage = (store, keys) => {
+    for (const key of keys) {
+      try {
+        const value = store.getItem(key);
+        if (value) return value;
+      } catch {}
+    }
+    return "";
+  };
+  const readUserIdFromJson = (value) => {
+    if (!value) return "";
+    try {
+      const parsed = JSON.parse(value);
+      const candidates = [
+        parsed?.id,
+        parsed?.user_id,
+        parsed?.userid,
+        parsed?.userId,
+        parsed?.data?.id,
+        parsed?.data?.user_id,
+        parsed?.data?.userid,
+        parsed?.data?.userId,
+        parsed?.user?.id,
+        parsed?.user?.user_id,
+        parsed?.user?.userid,
+        parsed?.user?.userId
+      ];
+      const found = candidates.find((item) => item !== undefined && item !== null && String(item).trim());
+      return found === undefined ? "" : String(found).trim();
+    } catch {
+      return "";
+    }
+  };
+  const cookies = document.cookie || "";
+  const sessionCookie = cookies
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item.toLowerCase().startsWith("session=")) || "";
+  const idKeys = ["new-api-user", "New-Api-User", "new_api_user", "newApiUser", "user_id", "userid", "userId", "id"];
+  const objectKeys = ["user", "user_info", "userInfo", "self", "profile", "account"];
+  const directId =
+    readStorage(localStorage, idKeys)
+    || readStorage(sessionStorage, idKeys)
+    || objectKeys.map((key) => readUserIdFromJson(readStorage(localStorage, [key]) || readStorage(sessionStorage, [key]))).find(Boolean)
+    || "";
+  const send = (payload) => {
+    const output = JSON.stringify(payload, null, 2);
+    if (window.opener) {
+      window.opener.postMessage(payload, targetOrigin);
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(output).catch(() => {});
+    }
+    console.log(output);
+    console.log(payload);
+  };
+  const finish = (extra = {}) => send({
+    source,
+    nonce,
+    siteType: "new_api",
+    session: sessionCookie,
+    user_id: directId,
+    ...extra
+  });
+  if (directId) {
+    finish();
+    return;
+  }
+  fetch("/api/user/self", { credentials: "include", headers: { Accept: "application/json" } })
+    .then((response) => response.ok ? response.json() : null)
+    .then((body) => {
+      const fromBody = readUserIdFromJson(JSON.stringify(body || {}));
+      finish({ user_id: fromBody });
+    })
+    .catch(() => finish());
+})()`;
+}
+
+function buildCredentialScript(siteType: CredentialCaptureType, nonce: string, targetOrigin: string) {
+  return siteType === "new_api" ? buildNewApiCredentialScript(nonce, targetOrigin) : buildSub2ApiCredentialScript(nonce, targetOrigin);
+}
+
+function parseCredentialPayload(value: string): CredentialCapturePayload | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as CredentialCapturePayload;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    const sessionMatch = trimmed.match(/(?:^|[;\s])session=([^;\s]+)/i);
+    const userMatch = trimmed.match(/(?:new-api-user|New-Api-User|user_id|userid|userId|id)\s*[:=]\s*([^\s;,]+)/i);
+    if (!sessionMatch && !userMatch) return null;
+    return {
+      siteType: "new_api",
+      session: sessionMatch ? `session=${sessionMatch[1]}` : "",
+      user_id: userMatch?.[1] ?? "",
+    };
+  }
+}
+
 function ruleSyncStatus(result: unknown) {
   const ruleSync = (result as { ruleSync?: { ok?: boolean; summary?: Record<string, unknown> } | null })?.ruleSync;
   const summary = ruleSync?.summary;
@@ -290,6 +483,8 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
   const [changePageSize, setChangePageSize] = useState(DEFAULT_PAGE_SIZE);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [credentialCapture, setCredentialCapture] = useState<CredentialCaptureSession | null>(null);
+  const credentialWindowRef = useRef<Window | null>(null);
 
   const siteId = selectedSiteId === "__all__" ? undefined : Number(selectedSiteId);
   const changeOffset = (changePage - 1) * changePageSize;
@@ -312,6 +507,88 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
     setRatePage(1);
     setChangePage(1);
   }, [connectionId]);
+
+  const applyCredentialPayload = useCallback(
+    (payload: CredentialCapturePayload, options: { requireNonce: boolean; origin?: string } = { requireNonce: true }) => {
+      if (payload.source && payload.source !== CREDENTIAL_CAPTURE_SOURCE) return false;
+      if (options.requireNonce) {
+        if (!credentialCapture || payload.nonce !== credentialCapture.nonce || payload.siteType !== credentialCapture.siteType) return false;
+        if (options.origin && options.origin !== credentialCapture.origin) {
+          setCredentialCapture((current) => current ? { ...current, error: "来源域名不匹配，已拒绝回填。" } : current);
+          return true;
+        }
+      }
+
+      const siteType = options.requireNonce ? credentialCapture?.siteType : payload.siteType ?? form.siteType;
+      if (siteType === "sub2api") {
+        const accessToken = stringifyValue(payload.access_token);
+        const refreshToken = stringifyValue(payload.refresh_token);
+        const tokenExpire = stringifyValue(payload.token_expires_at);
+        if (!accessToken || !refreshToken || !tokenExpire) {
+          const missing = [
+            !accessToken ? "Access Token" : "",
+            !refreshToken ? "Refresh Token" : "",
+            !tokenExpire ? "过期时间戳" : "",
+          ].filter(Boolean).join("、");
+          setCredentialCapture((current) => current ? { ...current, error: `Sub2API 凭证不完整，缺少 ${missing}。请登录后重试或手动补填。` } : current);
+          showToast({ title: "凭证不完整", description: `缺少 ${missing}`, variant: "error" });
+          return true;
+        }
+        setForm((current) => ({
+          ...current,
+          siteType: "sub2api",
+          authMode: "manual_token",
+          accessToken,
+          refreshToken,
+          tokenExpire,
+        }));
+        setCredentialCapture(null);
+        showToast({ title: "已回填 Sub2API 凭证", description: "已切换为手动 Token 模式。", variant: "success" });
+        return true;
+      }
+
+      if (siteType === "new_api") {
+        const rawSession = stringifyValue(payload.session ?? payload.access_token);
+        const userId = stringifyValue(payload.user_id ?? payload.userid ?? payload.new_api_user);
+        const session = normalizeSessionValue(rawSession);
+        if (!session || !userId) {
+          const missing = [
+            !session ? "Session" : "",
+            !userId ? "UserID" : "",
+          ].filter(Boolean).join("、");
+          setCredentialCapture((current) => current ? { ...current, error: `New API 凭证不完整，缺少 ${missing}。如果 session 是 HttpOnly，请手动填写。` } : current);
+          showToast({ title: "凭证不完整", description: `缺少 ${missing}`, variant: "error" });
+          return true;
+        }
+        setForm((current) => ({
+          ...current,
+          siteType: "new_api",
+          authMode: "manual_token",
+          accessToken: session,
+          newApiUserId: userId,
+          refreshToken: "",
+          tokenExpire: "",
+        }));
+        setCredentialCapture(null);
+        showToast({ title: "已回填 New API 凭证", description: "已切换为手动 Token 模式。", variant: "success" });
+        return true;
+      }
+
+      return false;
+    },
+    [credentialCapture, form.siteType, showToast],
+  );
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const payload = event.data as CredentialCapturePayload;
+      if (!payload || typeof payload !== "object" || payload.source !== CREDENTIAL_CAPTURE_SOURCE) return;
+      applyCredentialPayload(payload, { requireNonce: true, origin: event.origin });
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [applyCredentialPayload]);
 
   const invalidateCollection = async () => {
     await Promise.all([
@@ -461,6 +738,13 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
   }, [ratePage, ratePageCount]);
 
   useEffect(() => {
+    if (!formOpen) {
+      setCredentialCapture(null);
+      credentialWindowRef.current = null;
+    }
+  }, [formOpen]);
+
+  useEffect(() => {
     setChangePage(1);
   }, [changePageSize, connectionId, selectedSiteId]);
 
@@ -493,6 +777,62 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
     setForm(toForm(site));
     setFormError("");
     setFormOpen(true);
+  };
+
+  const startCredentialCapture = () => {
+    setFormError("");
+    const parsed = parseBaseUrl(form.baseUrl);
+    if (!parsed) {
+      const message = "源站地址必须以 http:// 或 https:// 开头";
+      setFormError(message);
+      showToast({ title: "无法打开源站", description: message, variant: "error" });
+      return;
+    }
+
+    const baseUrl = normalizeBaseUrl(form.baseUrl);
+    const nonce = randomNonce();
+    const script = buildCredentialScript(form.siteType, nonce, window.location.origin);
+    const opened = window.open(baseUrl, `s2a-credential-${nonce}`, "width=1200,height=820");
+    credentialWindowRef.current = opened;
+    setCredentialCapture({
+      nonce,
+      siteType: form.siteType,
+      origin: parsed.origin,
+      baseUrl,
+      script,
+      pasteValue: "",
+      error: opened ? "" : "浏览器拦截了新窗口。请允许弹窗后重试，或手动打开源站并运行脚本。",
+    });
+    setForm((current) => ({ ...current, baseUrl }));
+    if (!opened) {
+      showToast({ title: "新窗口被拦截", description: "请允许浏览器弹窗后重试。", variant: "error" });
+    }
+  };
+
+  const copyCredentialScript = async () => {
+    if (!credentialCapture) return;
+    try {
+      await navigator.clipboard.writeText(credentialCapture.script);
+      showToast({ title: "脚本已复制", description: "登录源站后在浏览器控制台粘贴运行。", variant: "success" });
+    } catch {
+      setCredentialCapture((current) => current ? { ...current, error: "复制失败，请手动选中脚本复制。" } : current);
+    }
+  };
+
+  const importPastedCredentials = () => {
+    if (!credentialCapture) return;
+    const payload = parseCredentialPayload(credentialCapture.pasteValue);
+    if (!payload) {
+      setCredentialCapture((current) => current ? { ...current, error: "无法识别粘贴内容，请粘贴脚本输出的 JSON。" } : current);
+      return;
+    }
+    applyCredentialPayload(
+      {
+        ...payload,
+        siteType: payload.siteType ?? credentialCapture.siteType,
+      },
+      { requireNonce: false },
+    );
   };
 
   const handleSaveSite = () => {
@@ -566,6 +906,9 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
   };
 
   const collecting = collectSite.isPending || collectAll.isPending;
+  const canStartCredentialCapture = parseBaseUrl(form.baseUrl) !== null;
+  const credentialCaptureButtonLabel = form.siteType === "new_api" ? "获取 Session+UserID" : "获取 AT+RT";
+  const credentialCaptureTitle = credentialCapture?.siteType === "new_api" ? "获取 New API Session+UserID" : "获取 Sub2API AT+RT+过期时间";
 
   return (
     <div className="space-y-4">
@@ -941,7 +1284,13 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
             </div>
             <div className="space-y-2">
               <Label>源站地址</Label>
-              <Input value={form.baseUrl} onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" />
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input value={form.baseUrl} onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))} placeholder="https://example.com" />
+                <Button type="button" variant="outline" onClick={startCredentialCapture} disabled={!canStartCredentialCapture} className="sm:w-auto">
+                  <KeyRound className="h-4 w-4" />
+                  {credentialCaptureButtonLabel}
+                </Button>
+              </div>
             </div>
             <div className="space-y-2">
               <Label>源站类型</Label>
@@ -992,6 +1341,53 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
               </div>
               <Switch checked={form.enabled} onCheckedChange={(checked) => setForm((current) => ({ ...current, enabled: checked }))} />
             </div>
+            {credentialCapture ? (
+              <div className="md:col-span-2 rounded-md border border-border/70 bg-muted/20 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 space-y-1">
+                    <Label>{credentialCaptureTitle}</Label>
+                    <p className="text-xs text-muted-foreground">
+                      已打开 {credentialCapture.baseUrl}。登录后在源站页面打开浏览器控制台，运行下方脚本；成功后会自动回填并切换为手动 Token。
+                    </p>
+                    {credentialCapture.siteType === "new_api" ? (
+                      <p className="text-xs text-muted-foreground">如果源站把 session 设置为 HttpOnly，脚本无法读取 Cookie，请使用下方手动 Token 字段填写。</p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => window.open(credentialCapture.baseUrl, `s2a-credential-${credentialCapture.nonce}`, "width=1200,height=820")}>
+                      <ExternalLink className="h-4 w-4" />
+                      打开源站
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={copyCredentialScript}>
+                      <Copy className="h-4 w-4" />
+                      复制脚本
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setCredentialCapture(null)}>
+                      关闭
+                    </Button>
+                  </div>
+                </div>
+                <Textarea
+                  value={credentialCapture.script}
+                  readOnly
+                  rows={8}
+                  className="mt-3 font-mono text-xs"
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <Textarea
+                    value={credentialCapture.pasteValue}
+                    onChange={(event) => setCredentialCapture((current) => current ? { ...current, pasteValue: event.target.value, error: "" } : current)}
+                    rows={3}
+                    placeholder="自动回传失败时，把脚本控制台输出的 JSON 粘贴到这里导入。"
+                  />
+                  <Button type="button" variant="outline" onClick={importPastedCredentials}>
+                    导入
+                  </Button>
+                </div>
+                {credentialCapture.error ? <p className="mt-2 text-sm text-destructive">{credentialCapture.error}</p> : null}
+              </div>
+            ) : null}
             {form.authMode === "manual_token" ? (
               <>
                 <div className="md:col-span-2 space-y-2">
