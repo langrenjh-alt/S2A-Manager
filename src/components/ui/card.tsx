@@ -5,7 +5,7 @@ const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElemen
   <div
     ref={ref}
     className={cn(
-      "rounded-lg border border-white/[0.55] bg-white/[0.56] text-card-foreground shadow-[inset_0_1px_0_hsl(0_0%_100%/0.36),0_18px_58px_hsl(217_34%_35%/0.12)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/[0.08] dark:shadow-[inset_0_1px_0_hsl(0_0%_100%/0.08),0_22px_70px_hsl(0_0%_0%/0.32)]",
+      "rounded-md border border-border/80 bg-card text-card-foreground shadow-sm",
       className,
     )}
     data-motion="card"
@@ -21,7 +21,7 @@ const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDiv
 CardHeader.displayName = "CardHeader";
 
 const CardTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>(({ className, ...props }, ref) => (
-  <h3 ref={ref} className={cn("text-[15px] font-semibold leading-none", className)} {...props} />
+  <h3 ref={ref} className={cn("text-[15px] font-semibold leading-tight tracking-tight", className)} {...props} />
 ));
 CardTitle.displayName = "CardTitle";
 

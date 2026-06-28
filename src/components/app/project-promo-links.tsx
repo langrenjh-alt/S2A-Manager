@@ -13,7 +13,7 @@ type ProjectPromoLinksProps = {
 
 export function ProjectPromoLinks({ className, stacked = false }: ProjectPromoLinksProps) {
   const linkClass = cn(
-    "inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-white/40 bg-white/[0.28] px-2.5 py-1.5 text-xs text-muted-foreground shadow-[inset_0_1px_0_hsl(0_0%_100%/0.18)] backdrop-blur-xl transition-colors hover:border-primary/35 hover:bg-white/[0.46] hover:text-foreground dark:border-white/10 dark:bg-white/[0.07] dark:hover:bg-white/10",
+    "inline-flex min-w-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm transition-colors hover:border-primary/35 hover:bg-secondary hover:text-foreground",
     stacked ? "w-full" : "max-w-full",
   );
 

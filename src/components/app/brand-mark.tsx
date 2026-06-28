@@ -18,34 +18,27 @@ export function BrandMark({ className }: BrandMarkProps) {
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <rect x="6" y="6" width="52" height="52" rx="16" fill="url(#s2a-mark-glass)" />
-      <rect x="6.5" y="6.5" width="51" height="51" rx="15.5" stroke="currentColor" strokeOpacity="0.16" />
+      <rect x="6" y="6" width="52" height="52" rx="15" fill="currentColor" fillOpacity="0.04" />
+      <rect x="6.5" y="6.5" width="51" height="51" rx="14.5" stroke="currentColor" strokeOpacity="0.18" />
       <path
         d="M19 24.5C19 20.9 22.1 18 26.6 18H43"
         stroke="currentColor"
-        strokeWidth="4"
+        strokeWidth="3.5"
         strokeLinecap="round"
       />
       <path
         d="M45 39.5C45 43.1 41.9 46 37.4 46H21"
         stroke="currentColor"
-        strokeWidth="4"
+        strokeWidth="3.5"
         strokeLinecap="round"
       />
       <path
         d="M23 32H41"
         stroke="currentColor"
-        strokeWidth="4"
+        strokeWidth="3.5"
         strokeLinecap="round"
       />
-      <path d="M38.5 25.5L45 32L38.5 38.5" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-      <defs>
-        <linearGradient id="s2a-mark-glass" x1="12" y1="9" x2="54" y2="58" gradientUnits="userSpaceOnUse">
-          <stop stopColor="white" stopOpacity="0.86" />
-          <stop offset="0.46" stopColor="#EAF3FF" stopOpacity="0.68" />
-          <stop offset="1" stopColor="#D8F4EA" stopOpacity="0.78" />
-        </linearGradient>
-      </defs>
+      <path d="M38.5 25.5L45 32L38.5 38.5" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

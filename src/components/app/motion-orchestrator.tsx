@@ -46,14 +46,14 @@ function isVisible(element: HTMLElement) {
 
 function fromVars(kind: string | undefined) {
   if (!kind) return { x: 0, y: 8, scale: 0.992 };
-  if (kind === "sidebar") return { x: -18, y: 0, scale: 0.99 };
-  if (kind === "header" || kind === "nav") return { x: 0, y: -10, scale: 1 };
-  if (kind === "dialog") return { x: 0, y: 18, scale: 0.98 };
-  if (kind === "toast") return { x: 16, y: -8, scale: 0.98 };
-  if (kind === "brand") return { x: 0, y: 0, scale: 0.92 };
-  if (kind === "control" || kind === "badge") return { x: 0, y: 6, scale: 0.985 };
-  if (kind === "row") return { x: 0, y: 8, scale: 1 };
-  return { x: 0, y: 14, scale: 0.985 };
+  if (kind === "sidebar") return { x: -10, y: 0, scale: 0.995 };
+  if (kind === "header" || kind === "nav") return { x: 0, y: -6, scale: 1 };
+  if (kind === "dialog") return { x: 0, y: 10, scale: 0.985 };
+  if (kind === "toast") return { x: 10, y: -6, scale: 0.99 };
+  if (kind === "brand") return { x: 0, y: 0, scale: 0.96 };
+  if (kind === "control" || kind === "badge") return { x: 0, y: 4, scale: 0.99 };
+  if (kind === "row") return { x: 0, y: 4, scale: 1 };
+  return { x: 0, y: 8, scale: 0.992 };
 }
 
 function markReady(element: HTMLElement) {
@@ -122,11 +122,11 @@ export function MotionOrchestrator() {
             x: 0,
             y: 0,
             scale: 1,
-            duration: group === content ? 0.48 : 0.58,
-            stagger: group === content ? 0.026 : 0.04,
+            duration: group === content ? 0.32 : 0.42,
+            stagger: group === content ? 0.016 : 0.02,
             clearProps: "opacity,visibility,transform",
           },
-          group === content ? "-=0.22" : "-=0.08",
+          group === content ? "-=0.12" : "-=0.04",
         );
       }
     };
@@ -158,9 +158,9 @@ export function MotionOrchestrator() {
       if (!target || movedInsideTarget(event, target)) return;
       const hoverMode = target.dataset.motionHover ?? (target.matches("button,a[href],[role='button']") ? "lift" : "scale");
       gsap.to(target, {
-        y: hoverMode === "lift" ? -1.25 : -0.4,
-        scale: hoverMode === "scale" ? 1.006 : 1,
-        duration: 0.32,
+        y: hoverMode === "lift" ? -0.75 : -0.2,
+        scale: hoverMode === "scale" ? 1.003 : 1,
+        duration: 0.22,
         ease: "power2.out",
         overwrite: "auto",
       });
@@ -170,7 +170,7 @@ export function MotionOrchestrator() {
       if (reducedMotion) return;
       const target = hoverTarget(event);
       if (!target || movedInsideTarget(event, target)) return;
-      gsap.to(target, { y: 0, scale: 1, duration: 0.36, ease: "power2.out", overwrite: "auto", clearProps: "transform" });
+      gsap.to(target, { y: 0, scale: 1, duration: 0.24, ease: "power2.out", overwrite: "auto", clearProps: "transform" });
     };
 
     document.addEventListener("pointerover", handlePointerEnter);

@@ -146,7 +146,7 @@ export const BlSourceBadges = memo(function BlSourceBadges({ bindings, loading }
             className={
               binding.monitorExcluded
                 ? "h-auto min-h-6 min-w-0 max-w-full whitespace-normal break-words border-amber-500/45 bg-amber-500/15 px-2.5 py-1 leading-5 shadow-sm ring-1 ring-amber-500/20 [overflow-wrap:anywhere]"
-                : "h-auto min-h-6 min-w-0 max-w-full whitespace-normal break-words border-border/80 bg-background/80 px-2.5 py-1 leading-5 shadow-sm ring-1 ring-border/30 [overflow-wrap:anywhere] dark:border-white/20 dark:bg-white/[0.07]"
+                : "h-auto min-h-6 min-w-0 max-w-full whitespace-normal break-words border-border/80 bg-background/80 px-2.5 py-1 leading-5 shadow-sm ring-1 ring-border/30 [overflow-wrap:anywhere]"
             }
             title={binding.monitorExcluded ? `上游监测暂停，暂不参与计算：${excludedBy || "未知账号"}` : undefined}
           >

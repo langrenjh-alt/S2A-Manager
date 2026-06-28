@@ -810,7 +810,7 @@ export function AnnouncementsPanel({ connectionId }: { connectionId: number }) {
                   <MobileRecord key={announcement.id}>
                     <MobileRecordHeader>
                       <div className="flex min-w-0 gap-2">
-                        <Checkbox className="mt-0.5 size-5 shrink-0 border-slate-400/80 bg-white/85 shadow-[inset_0_1px_0_hsl(0_0%_100%/0.65),0_2px_8px_hsl(217_34%_35%/0.14)] dark:border-white/35 dark:bg-white/15" checked={checked} onCheckedChange={(value) => toggleAnnouncement(announcement.id, value === true)} aria-label={`选择 ${announcement.title}`} />
+                        <Checkbox className="mt-0.5 size-5 shrink-0" checked={checked} onCheckedChange={(value) => toggleAnnouncement(announcement.id, value === true)} aria-label={`选择 ${announcement.title}`} />
                         <div className="min-w-0">
                           <MobileRecordTitle className="truncate">{announcement.title}</MobileRecordTitle>
                           <MobileRecordMeta className="line-clamp-2">{announcement.content}</MobileRecordMeta>
@@ -843,7 +843,7 @@ export function AnnouncementsPanel({ connectionId }: { connectionId: number }) {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-14 min-w-14 text-center">
-                  <Checkbox className="mx-auto size-5 border-slate-400/80 bg-white/85 shadow-[inset_0_1px_0_hsl(0_0%_100%/0.65),0_2px_8px_hsl(217_34%_35%/0.14)] dark:border-white/35 dark:bg-white/15" checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false} onCheckedChange={(value) => toggleVisibleAnnouncements(value === true)} aria-label="选择当前筛选结果" />
+                  <Checkbox className="mx-auto size-5" checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false} onCheckedChange={(value) => toggleVisibleAnnouncements(value === true)} aria-label="选择当前筛选结果" />
                 </TableHead>
                 <TableHead>标题</TableHead>
                 <TableHead className="w-24">状态</TableHead>
@@ -867,7 +867,7 @@ export function AnnouncementsPanel({ connectionId }: { connectionId: number }) {
                   return (
                     <TableRow key={announcement.id}>
                       <TableCell className="w-14 min-w-14 text-center">
-                        <Checkbox className="mx-auto size-5 border-slate-400/80 bg-white/85 shadow-[inset_0_1px_0_hsl(0_0%_100%/0.65),0_2px_8px_hsl(217_34%_35%/0.14)] dark:border-white/35 dark:bg-white/15" checked={checked} onCheckedChange={(value) => toggleAnnouncement(announcement.id, value === true)} aria-label={`选择 ${announcement.title}`} />
+                        <Checkbox className="mx-auto size-5" checked={checked} onCheckedChange={(value) => toggleAnnouncement(announcement.id, value === true)} aria-label={`选择 ${announcement.title}`} />
                       </TableCell>
                       <TableCell>
                         <div className="max-w-[460px] truncate font-medium">{announcement.title}</div>

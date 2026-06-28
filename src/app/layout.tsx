@@ -1,10 +1,23 @@
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import { AuthGuard } from "@/components/app/auth-guard";
 import { MotionOrchestrator } from "@/components/app/motion-orchestrator";
 import { ThemeProvider } from "@/components/app/theme-provider";
 import { TrpcProvider } from "@/components/app/trpc-provider";
 import { ToastProvider } from "@/components/ui/toast";
 import "./globals.css";
+
+const geistSans = localFont({
+  src: "./fonts/GeistVF.woff",
+  variable: "--font-geist-sans",
+  display: "swap",
+});
+
+const geistMono = localFont({
+  src: "./fonts/GeistMonoVF.woff",
+  variable: "--font-geist-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "S2A Manager",
@@ -13,7 +26,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN" className="motion-ready" suppressHydrationWarning>
+    <html lang="zh-CN" className={`${geistSans.variable} ${geistMono.variable} motion-ready`} suppressHydrationWarning>
       <body>
         <ThemeProvider>
           <ToastProvider>

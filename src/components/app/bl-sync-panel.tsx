@@ -1447,7 +1447,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
             </div>
             {credentialCapture ? (
               <div className="md:col-span-2 rounded-md border border-border/70 bg-muted/20 p-3">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="space-y-3">
                   <div className="min-w-0 space-y-1">
                     <Label>{credentialCaptureTitle}</Label>
                     <p className="text-xs text-muted-foreground">
@@ -1462,7 +1462,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
                   <div className="flex shrink-0 flex-wrap gap-2">
                     <a
                       href={credentialCapture.bookmarklet}
-                      className="inline-flex h-8 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-primary/35 bg-primary/90 px-2.5 text-xs font-medium text-primary-foreground shadow-[inset_0_1px_0_hsl(0_0%_100%/0.22),0_8px_24px_hsl(217_34%_35%/0.08)] transition-colors hover:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/55 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      className="inline-flex h-8 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-primary/35 bg-primary px-2.5 text-xs font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       title="拖到浏览器书签栏；在源站页面点击该书签即可回传凭证"
                       onClick={(event) => event.preventDefault()}
                     >
