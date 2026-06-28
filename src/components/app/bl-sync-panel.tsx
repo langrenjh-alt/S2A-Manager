@@ -885,7 +885,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
     const nonce = randomNonce();
     const script = buildCredentialScript(form.siteType, nonce, window.location.origin);
     const bookmarklet = UNIVERSAL_CREDENTIAL_BOOKMARKLET;
-    const opened = window.open(baseUrl, `s2a-credential-${nonce}`, "width=1200,height=820");
+    const opened = window.open(baseUrl, "_blank");
     credentialWindowRef.current = opened;
     setCredentialCapture({
       nonce,
@@ -1453,8 +1453,8 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
                     <p className="text-xs text-muted-foreground">
                       已打开 {credentialCapture.baseUrl}。首次使用时把“拖到书签栏”按钮拖进浏览器书签栏；这是 Sub2API 和 New API 共用的书签。
                     </p>
-                    <p className="text-xs text-muted-foreground">以后源站已登录就直接点书签，未登录就登录后点书签；S2A 会按当前选择的源站类型自动回填。</p>
-                    <p className="text-xs text-muted-foreground">如果浏览器不允许拖拽 javascript 书签，可复制书签链接后手动新建书签，或使用下方“复制脚本”在控制台运行。</p>
+                    <p className="text-xs text-muted-foreground">书签安装在当前 S2A 页面完成即可；以后源站已登录就直接点书签，未登录就登录后点书签，S2A 会按当前选择的源站类型自动回填。</p>
+                    <p className="text-xs text-muted-foreground">如果新标签页仍看不到书签栏，先在浏览器设置里显示书签栏；也可以复制书签链接后手动新建书签，或使用下方“复制脚本”在控制台运行。</p>
                     {credentialCapture.siteType === "new_api" ? (
                       <p className="text-xs text-muted-foreground">如果源站把 session 设置为 HttpOnly，脚本无法读取 Cookie，请使用下方手动 Token 字段填写。</p>
                     ) : null}
@@ -1473,7 +1473,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
                       <Copy className="h-4 w-4" />
                       复制书签链接
                     </Button>
-                    <Button type="button" variant="outline" size="sm" onClick={() => window.open(credentialCapture.baseUrl, `s2a-credential-${credentialCapture.nonce}`, "width=1200,height=820")}>
+                    <Button type="button" variant="outline" size="sm" onClick={() => window.open(credentialCapture.baseUrl, "_blank")}>
                       <ExternalLink className="h-4 w-4" />
                       打开源站
                     </Button>
