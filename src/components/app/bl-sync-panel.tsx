@@ -99,6 +99,7 @@ type CredentialCaptureSession = {
   origin: string;
   baseUrl: string;
   script: string;
+  bookmarklet: string;
   pasteValue: string;
   error: string;
 };
@@ -397,9 +398,97 @@ function buildNewApiCredentialScript(nonce: string, targetOrigin: string) {
 })()`;
 }
 
+function buildUniversalCredentialScript() {
+  return `(() => {
+  const source = ${JSON.stringify(CREDENTIAL_CAPTURE_SOURCE)};
+  const readStorage = (store, keys) => {
+    for (const key of keys) {
+      try {
+        const value = store.getItem(key);
+        if (value) return value;
+      } catch {}
+    }
+    return "";
+  };
+  const readUserIdFromJson = (value) => {
+    if (!value) return "";
+    try {
+      const parsed = JSON.parse(value);
+      const candidates = [
+        parsed?.id,
+        parsed?.user_id,
+        parsed?.userid,
+        parsed?.userId,
+        parsed?.data?.id,
+        parsed?.data?.user_id,
+        parsed?.data?.userid,
+        parsed?.data?.userId,
+        parsed?.user?.id,
+        parsed?.user?.user_id,
+        parsed?.user?.userid,
+        parsed?.user?.userId
+      ];
+      const found = candidates.find((item) => item !== undefined && item !== null && String(item).trim());
+      return found === undefined ? "" : String(found).trim();
+    } catch {
+      return "";
+    }
+  };
+  const cookies = document.cookie || "";
+  const sessionCookie = cookies
+    .split(";")
+    .map((item) => item.trim())
+    .find((item) => item.toLowerCase().startsWith("session=")) || "";
+  const idKeys = ["new-api-user", "New-Api-User", "new_api_user", "newApiUser", "user_id", "userid", "userId", "id"];
+  const objectKeys = ["user", "user_info", "userInfo", "self", "profile", "account"];
+  const directId =
+    readStorage(localStorage, idKeys)
+    || readStorage(sessionStorage, idKeys)
+    || objectKeys.map((key) => readUserIdFromJson(readStorage(localStorage, [key]) || readStorage(sessionStorage, [key]))).find(Boolean)
+    || "";
+  const send = (extra = {}) => {
+    const payload = {
+      source,
+      access_token: localStorage.getItem("auth_token") || "",
+      refresh_token: localStorage.getItem("refresh_token") || "",
+      token_expires_at: localStorage.getItem("token_expires_at") || "",
+      session: sessionCookie,
+      user_id: directId,
+      ...extra
+    };
+    const output = JSON.stringify(payload, null, 2);
+    if (window.opener) {
+      window.opener.postMessage(payload, "*");
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(output).catch(() => {});
+    }
+    console.log(output);
+    console.log(payload);
+  };
+  if (directId) {
+    send();
+    return;
+  }
+  fetch("/api/user/self", { credentials: "include", headers: { Accept: "application/json" } })
+    .then((response) => response.ok ? response.json() : null)
+    .then((body) => {
+      const fromBody = readUserIdFromJson(JSON.stringify(body || {}));
+      send({ user_id: fromBody });
+    })
+    .catch(() => send());
+})()`;
+}
+
 function buildCredentialScript(siteType: CredentialCaptureType, nonce: string, targetOrigin: string) {
   return siteType === "new_api" ? buildNewApiCredentialScript(nonce, targetOrigin) : buildSub2ApiCredentialScript(nonce, targetOrigin);
 }
+
+function buildBookmarklet(script: string) {
+  return `javascript:${encodeURIComponent(script)}`;
+}
+
+const UNIVERSAL_CREDENTIAL_BOOKMARKLET = buildBookmarklet(buildUniversalCredentialScript());
 
 function parseCredentialPayload(value: string): CredentialCapturePayload | null {
   const trimmed = value.trim();
@@ -512,7 +601,10 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
     (payload: CredentialCapturePayload, options: { requireNonce: boolean; origin?: string } = { requireNonce: true }) => {
       if (payload.source && payload.source !== CREDENTIAL_CAPTURE_SOURCE) return false;
       if (options.requireNonce) {
-        if (!credentialCapture || payload.nonce !== credentialCapture.nonce || payload.siteType !== credentialCapture.siteType) return false;
+        if (!credentialCapture) return false;
+        const nonceMatches = payload.nonce === credentialCapture.nonce && payload.siteType === credentialCapture.siteType;
+        const isUniversalBookmarklet = !payload.nonce && !payload.siteType;
+        if (!nonceMatches && !isUniversalBookmarklet) return false;
         if (options.origin && options.origin !== credentialCapture.origin) {
           setCredentialCapture((current) => current ? { ...current, error: "来源域名不匹配，已拒绝回填。" } : current);
           return true;
@@ -792,6 +884,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
     const baseUrl = normalizeBaseUrl(form.baseUrl);
     const nonce = randomNonce();
     const script = buildCredentialScript(form.siteType, nonce, window.location.origin);
+    const bookmarklet = UNIVERSAL_CREDENTIAL_BOOKMARKLET;
     const opened = window.open(baseUrl, `s2a-credential-${nonce}`, "width=1200,height=820");
     credentialWindowRef.current = opened;
     setCredentialCapture({
@@ -800,6 +893,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
       origin: parsed.origin,
       baseUrl,
       script,
+      bookmarklet,
       pasteValue: "",
       error: opened ? "" : "浏览器拦截了新窗口。请允许弹窗后重试，或手动打开源站并运行脚本。",
     });
@@ -816,6 +910,16 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
       showToast({ title: "脚本已复制", description: "登录源站后在浏览器控制台粘贴运行。", variant: "success" });
     } catch {
       setCredentialCapture((current) => current ? { ...current, error: "复制失败，请手动选中脚本复制。" } : current);
+    }
+  };
+
+  const copyBookmarklet = async () => {
+    if (!credentialCapture) return;
+    try {
+      await navigator.clipboard.writeText(credentialCapture.bookmarklet);
+      showToast({ title: "书签脚本链接已复制", description: "可新建书签并把链接粘贴到网址栏。", variant: "success" });
+    } catch {
+      setCredentialCapture((current) => current ? { ...current, error: "复制书签链接失败，请拖拽书签按钮到书签栏。" } : current);
     }
   };
 
@@ -1347,13 +1451,28 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
                   <div className="min-w-0 space-y-1">
                     <Label>{credentialCaptureTitle}</Label>
                     <p className="text-xs text-muted-foreground">
-                      已打开 {credentialCapture.baseUrl}。登录后在源站页面打开浏览器控制台，运行下方脚本；成功后会自动回填并切换为手动 Token。
+                      已打开 {credentialCapture.baseUrl}。首次使用时把“拖到书签栏”按钮拖进浏览器书签栏；这是 Sub2API 和 New API 共用的书签。
                     </p>
+                    <p className="text-xs text-muted-foreground">以后源站已登录就直接点书签，未登录就登录后点书签；S2A 会按当前选择的源站类型自动回填。</p>
+                    <p className="text-xs text-muted-foreground">如果浏览器不允许拖拽 javascript 书签，可复制书签链接后手动新建书签，或使用下方“复制脚本”在控制台运行。</p>
                     {credentialCapture.siteType === "new_api" ? (
                       <p className="text-xs text-muted-foreground">如果源站把 session 设置为 HttpOnly，脚本无法读取 Cookie，请使用下方手动 Token 字段填写。</p>
                     ) : null}
                   </div>
                   <div className="flex shrink-0 flex-wrap gap-2">
+                    <a
+                      href={credentialCapture.bookmarklet}
+                      className="inline-flex h-8 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-primary/35 bg-primary/90 px-2.5 text-xs font-medium text-primary-foreground shadow-[inset_0_1px_0_hsl(0_0%_100%/0.22),0_8px_24px_hsl(217_34%_35%/0.08)] transition-colors hover:bg-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/55 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      title="拖到浏览器书签栏；在源站页面点击该书签即可回传凭证"
+                      onClick={(event) => event.preventDefault()}
+                    >
+                      <KeyRound className="h-4 w-4" />
+                      拖到书签栏
+                    </a>
+                    <Button type="button" variant="outline" size="sm" onClick={copyBookmarklet}>
+                      <Copy className="h-4 w-4" />
+                      复制书签链接
+                    </Button>
                     <Button type="button" variant="outline" size="sm" onClick={() => window.open(credentialCapture.baseUrl, `s2a-credential-${credentialCapture.nonce}`, "width=1200,height=820")}>
                       <ExternalLink className="h-4 w-4" />
                       打开源站
@@ -1374,6 +1493,7 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
                   className="mt-3 font-mono text-xs"
                   onFocus={(event) => event.currentTarget.select()}
                 />
+                <p className="mt-2 text-xs text-muted-foreground">上方脚本是控制台兜底用；优先使用书签栏按钮，操作更少。</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
                   <Textarea
                     value={credentialCapture.pasteValue}
