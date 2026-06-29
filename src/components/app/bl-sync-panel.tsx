@@ -1035,27 +1035,35 @@ export function BlSyncPanel({ connectionId }: { connectionId: number }) {
 
       <div className="grid gap-3 md:grid-cols-4">
         <Card className="h-full">
-          <CardContent className="flex min-h-20 flex-col justify-center p-4">
-            <div className="text-sm text-muted-foreground">采集源</div>
-            <div className="mt-1 text-2xl font-semibold">{sitesList.length}</div>
+          <CardHeader className="gap-0.5 px-4 pt-5 pb-1 sm:px-5 sm:pt-5">
+            <CardTitle className="text-xs font-medium tracking-normal text-muted-foreground">采集源</CardTitle>
+          </CardHeader>
+          <CardContent className="flex min-h-16 items-end px-4 pb-4 pt-0 sm:px-5 sm:pb-5">
+            <div className="text-2xl font-semibold leading-none">{sitesList.length}</div>
           </CardContent>
         </Card>
         <Card className="h-full">
-          <CardContent className="flex min-h-20 flex-col justify-center p-4">
-            <div className="text-sm text-muted-foreground">启用</div>
-            <div className="mt-1 text-2xl font-semibold">{enabledSites}</div>
+          <CardHeader className="gap-0.5 px-4 pt-5 pb-1 sm:px-5 sm:pt-5">
+            <CardTitle className="text-xs font-medium tracking-normal text-muted-foreground">启用</CardTitle>
+          </CardHeader>
+          <CardContent className="flex min-h-16 items-end px-4 pb-4 pt-0 sm:px-5 sm:pb-5">
+            <div className="text-2xl font-semibold leading-none">{enabledSites}</div>
           </CardContent>
         </Card>
         <Card className="h-full">
-          <CardContent className="flex min-h-20 flex-col justify-center p-4">
-            <div className="text-sm text-muted-foreground">在线</div>
-            <div className="mt-1 text-2xl font-semibold">{onlineSites}</div>
+          <CardHeader className="gap-0.5 px-4 pt-5 pb-1 sm:px-5 sm:pt-5">
+            <CardTitle className="text-xs font-medium tracking-normal text-muted-foreground">在线</CardTitle>
+          </CardHeader>
+          <CardContent className="flex min-h-16 items-end px-4 pb-4 pt-0 sm:px-5 sm:pb-5">
+            <div className="text-2xl font-semibold leading-none">{onlineSites}</div>
           </CardContent>
         </Card>
         <Card className="h-full">
-          <CardContent className="flex min-h-20 flex-col justify-center p-4">
-            <div className="text-sm text-muted-foreground">当前倍率</div>
-            <div className="mt-1 text-2xl font-semibold">{ratesList.length}</div>
+          <CardHeader className="gap-0.5 px-4 pt-5 pb-1 sm:px-5 sm:pt-5">
+            <CardTitle className="text-xs font-medium tracking-normal text-muted-foreground">当前倍率</CardTitle>
+          </CardHeader>
+          <CardContent className="flex min-h-16 items-end px-4 pb-4 pt-0 sm:px-5 sm:pb-5">
+            <div className="text-2xl font-semibold leading-none">{ratesList.length}</div>
           </CardContent>
         </Card>
       </div>

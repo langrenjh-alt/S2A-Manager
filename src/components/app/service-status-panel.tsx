@@ -81,13 +81,15 @@ function StatusCard({
 
   return (
     <Card className="h-full">
-      <CardContent className="flex min-h-24 items-center gap-3 p-4">
-        <div className={`rounded-md p-2 ${toneClass}`}>
+      <CardHeader className="gap-0.5 px-4 pt-5 pb-1 sm:px-5 sm:pt-5">
+        <CardTitle className="text-xs font-medium tracking-normal text-muted-foreground">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="flex min-h-16 items-start gap-3 px-4 pb-4 pt-0 sm:px-5 sm:pb-5">
+        <div className={`shrink-0 rounded-md p-2 ${toneClass}`}>
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm text-muted-foreground">{title}</div>
-          <div className="mt-1 text-lg font-semibold">{value}</div>
+          <div className="text-lg font-semibold leading-none">{value}</div>
           <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
         </div>
       </CardContent>
