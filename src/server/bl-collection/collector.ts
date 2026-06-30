@@ -224,7 +224,7 @@ function computeBackoff(intervalMin: number, failures: number): number {
   if (failures <= 3) return intervalMin;
   const exp = Math.min(failures - 3, 5);
   const backoff = intervalMin * Math.pow(2, exp);
-  return Math.min(backoff, 360);
+  return Math.min(backoff, 60);
 }
 
 function normalizeGroups(groups: unknown[], rates: Record<string, unknown>): NormalizedGroup[] {

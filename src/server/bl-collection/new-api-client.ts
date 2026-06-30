@@ -58,7 +58,99 @@ export class BlNewApiClient implements BlCollectorClient {
   }
 
   async groupsAvailable(accessToken: string) {
-    const pricing = await this.pricing(accessToken);
+    try {
+      return await this.selfGroups(accessToken);
+    } catch (primaryError) {
+      try {
+        return groupsFromPricing(await this.pricing(accessToken));
+      } catch (fallbackError) {
+        throw new Error(
+          `获取 New API 分组失败：/api/user/self/groups ${errorMessage(primaryError)}；/api/pricing fallback ${errorMessage(fallbackError)}`,
+        );
+      }
+    }
+  }
+
+  async groupRates() {
+    return {};
+  }
+
+  async channelsAvailable(accessToken: string) {
+    try {
+      return channelsFromPricing(await this.pricing(accessToken));
+    } catch (error) {
+      if (isOptionalPricingError(error)) return [];
+      throw error;
+    }
+  }
+
+  private async selfGroups(accessToken: string) {
+    const { status, body: raw } = await requestText({
+      method: "GET",
+      url: `${this.baseUrl.replace(/\/+$/, "")}/api/user/self/groups`,
+      headers: authHeaders(accessToken),
+      timeoutMs: this.timeoutMs,
+    });
+
+    if (status === 401) {
+      throw new Error("New API session 已过期或无效，请重新填写 session / New-Api-User");
+    }
+    if (status === 403) {
+      throw new Error(`返回 HTTP 403${responseMessage(raw) ? ": " + responseMessage(raw) : ""}`);
+    }
+    if (status !== 200) throw new Error(`返回 HTTP ${status}: ${raw.slice(0, 200)}`);
+
+    const payload = parseJson(raw);
+    if (payload.success !== true) {
+      throw new Error(safeJsonString(payload.message) || "获取 New API 用户分组失败");
+    }
+
+    const data = asRecord(payload.data);
+    return Object.entries(data).map(([id, item]) => {
+      const group = asRecord(item);
+      const desc = safeJsonString(group.desc).trim();
+      return {
+        id,
+        name: id,
+        platform: "new-api",
+        subscription_type: "user_group",
+        is_exclusive: false,
+        rate_multiplier: floatOrNull(group.ratio),
+        description: desc || null,
+      };
+    });
+  }
+
+  private async pricing(accessToken: string) {
+    if (this.pricingCache) return this.pricingCache;
+
+    const { status, body: raw } = await requestText({
+      method: "GET",
+      url: `${this.baseUrl.replace(/\/+$/, "")}/api/pricing`,
+      headers: authHeaders(accessToken),
+      timeoutMs: this.timeoutMs,
+    });
+
+    if (status === 401) {
+      this.pricingCache = undefined;
+      throw new Error("New API session 已过期或无效，请重新填写 session / New-Api-User");
+    }
+    if (status === 403) {
+      this.pricingCache = undefined;
+      throw new Error(`New API /api/pricing 返回 HTTP 403${responseMessage(raw) ? ": " + responseMessage(raw) : ""}`);
+    }
+    if (status !== 200) throw new Error(`New API /api/pricing 返回 HTTP ${status}: ${raw.slice(0, 200)}`);
+
+    const payload = parseJson(raw);
+    if (payload.success !== true) {
+      throw new Error(safeJsonString(payload.message) || "获取 New API 定价失败");
+    }
+    this.pricingCache = payload;
+    return payload;
+  }
+}
+
+function groupsFromPricing(pricing: NewApiPricing) {
     const groupRatio = asRecord(pricing.group_ratio);
     const usableGroup = asRecord(pricing.usable_group);
     const autoGroups = Array.isArray(pricing.auto_groups) ? pricing.auto_groups.map(String) : [];
@@ -71,14 +163,9 @@ export class BlNewApiClient implements BlCollectorClient {
       is_exclusive: false,
       rate_multiplier: floatOrNull(ratio),
     }));
-  }
+}
 
-  async groupRates() {
-    return {};
-  }
-
-  async channelsAvailable(accessToken: string) {
-    const pricing = await this.pricing(accessToken);
+function channelsFromPricing(pricing: NewApiPricing) {
     const models = Array.isArray(pricing.data) ? pricing.data : [];
     const vendors = Array.isArray(pricing.vendors) ? pricing.vendors : [];
     const vendorMap = new Map<string, string>();
@@ -135,45 +222,50 @@ export class BlNewApiClient implements BlCollectorClient {
     }
 
     return [...grouped.values()];
-  }
-
-  private async pricing(accessToken: string) {
-    if (this.pricingCache) return this.pricingCache;
-
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const [token, userId] = accessToken.split("::", 2);
-
-    if (userId) headers["New-Api-User"] = userId;
-    if (token.startsWith("session:")) {
-      headers.Cookie = token.slice("session:".length);
-    } else if (token && token !== "public") {
-      headers.Authorization = `Bearer ${token}`;
-    }
-
-    const { status, body: raw } = await requestText({
-      method: "GET",
-      url: `${this.baseUrl.replace(/\/+$/, "")}/api/pricing`,
-      headers,
-      timeoutMs: this.timeoutMs,
-    });
-
-    if (status === 401 || status === 403) {
-      this.pricingCache = undefined;
-      throw new Error("session 已过期，将自动重新登录");
-    }
-    if (status !== 200) throw new Error(`接口返回 HTTP ${status}: ${raw.slice(0, 200)}`);
-
-    const payload = JSON.parse(raw) as NewApiPricing;
-    if (payload.success !== true) {
-      throw new Error(safeJsonString(payload.message) || "获取 New API 定价失败");
-    }
-    this.pricingCache = payload;
-    return payload;
-  }
 }
 
 function asRecord(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function authHeaders(accessToken: string) {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const [token, userId] = accessToken.split("::", 2);
+
+  if (userId) headers["New-Api-User"] = userId;
+  if (token.startsWith("session:")) {
+    headers.Cookie = token.slice("session:".length);
+  } else if (token && token !== "public") {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  return headers;
+}
+
+function parseJson(raw: string) {
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error(`响应不是有效 JSON: ${raw.slice(0, 200)}`);
+  }
+}
+
+function responseMessage(raw: string) {
+  try {
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    return safeJsonString(payload.message).trim();
+  } catch {
+    return raw.slice(0, 200);
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isOptionalPricingError(error: unknown) {
+  const message = errorMessage(error);
+  return message.includes("New API /api/pricing 返回 HTTP 403") || message.includes("New API /api/pricing 返回 HTTP 404");
 }
 
 function sessionCookieFromHeaders(headers?: Record<string, string>) {
