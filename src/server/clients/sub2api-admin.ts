@@ -12,6 +12,13 @@ type ListEnvelope<T> = {
   data?: T[] | { items?: T[] };
 };
 
+type PaginatedListOptions = {
+  page?: number;
+  pageSize?: number;
+  sortBy?: string;
+  sortOrder?: "asc" | "desc";
+};
+
 type Sub2ApiAccountTestEvent = {
   type?: string;
   text?: string;
@@ -78,6 +85,25 @@ export type UserRateMultiplierEntry = {
   user_name?: string | null;
   user_email?: string | null;
   rate_multiplier?: number | null;
+};
+
+export type Sub2ApiUsageLog = {
+  id: number | null;
+  account_id: number | null;
+  group_id: number | null;
+  stream: boolean;
+  first_token_ms: number | null;
+  created_at: string | null;
+};
+
+export type Sub2ApiUsageLogListOptions = PaginatedListOptions & {
+  accountId?: number;
+  groupId?: number;
+  stream?: boolean;
+  startDate?: string;
+  endDate?: string;
+  timezone?: string;
+  exactTotal?: boolean;
 };
 
 export type Sub2ApiAccountWrite = {
@@ -148,6 +174,42 @@ function normalizeAccountModels(payload: unknown): Sub2ApiAccountModel[] {
       } satisfies Sub2ApiAccountModel;
     })
     .filter((model): model is Sub2ApiAccountModel => Boolean(model));
+}
+
+function numberOrNull(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function integerOrNull(value: unknown) {
+  const numeric = numberOrNull(value);
+  return numeric !== null && Number.isInteger(numeric) ? numeric : null;
+}
+
+function normalizeUsageLogs(payload: unknown): Sub2ApiUsageLog[] {
+  return unwrapList<unknown>(payload, "usage logs")
+    .map((item): Sub2ApiUsageLog | null => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const accountId = integerOrNull(row.account_id) ?? integerOrNull(row.accountId);
+      const groupId = integerOrNull(row.group_id) ?? integerOrNull(row.groupId);
+      const firstTokenMs = integerOrNull(row.first_token_ms) ?? integerOrNull(row.firstTokenMs);
+      const createdAt = typeof row.created_at === "string"
+        ? row.created_at
+        : typeof row.createdAt === "string"
+          ? row.createdAt
+          : null;
+      return {
+        id: integerOrNull(row.id),
+        account_id: accountId,
+        group_id: groupId,
+        stream: row.stream === true || row.stream === "true",
+        first_token_ms: firstTokenMs,
+        created_at: createdAt,
+      };
+    })
+    .filter((row): row is Sub2ApiUsageLog => Boolean(row));
 }
 
 function normalizeDataPayload(payload: unknown): Sub2ApiDataPayload {
@@ -412,6 +474,23 @@ export class Sub2ApiAdminClient {
     const query = new URLSearchParams({ source });
     if (force) query.set("force", "true");
     return this.request<Record<string, unknown>>("GET", `/accounts/${accountId}/usage?${query.toString()}`);
+  }
+
+  async listUsageLogs(options: Sub2ApiUsageLogListOptions = {}) {
+    const query = new URLSearchParams();
+    query.set("page", String(Math.max(1, options.page ?? 1)));
+    query.set("page_size", String(Math.min(200, Math.max(1, options.pageSize ?? 50))));
+    query.set("sort_by", options.sortBy ?? "created_at");
+    query.set("sort_order", options.sortOrder ?? "desc");
+    if (options.accountId !== undefined) query.set("account_id", String(options.accountId));
+    if (options.groupId !== undefined) query.set("group_id", String(options.groupId));
+    if (options.stream !== undefined) query.set("stream", String(options.stream));
+    if (options.startDate) query.set("start_date", options.startDate);
+    if (options.endDate) query.set("end_date", options.endDate);
+    if (options.timezone) query.set("timezone", options.timezone);
+    if (options.exactTotal !== undefined) query.set("exact_total", String(options.exactTotal));
+    const payload = await this.request<unknown>("GET", `/usage?${query.toString()}`);
+    return normalizeUsageLogs(payload);
   }
 
   // Announcements

@@ -7,7 +7,7 @@ import { Sub2ApiAdminClient } from "@/server/clients/sub2api-admin";
 import { normalizeRateMultiplier } from "@/server/rates";
 import { fetchAccountBalances } from "@/server/account-balance";
 import { getAccountId } from "@/server/account-utils";
-import { applyAccountPriorityRule, readAccountPriorityRule, saveAccountPriorityRule } from "@/server/account-priority-rule";
+import { applyAccountPriorityRule, maxAccountPriority, readAccountPriorityRule, saveAccountPriorityRule } from "@/server/account-priority-rule";
 import {
   checkAccountBalanceAlerts,
   clearAccountBalanceAlertState,
@@ -40,6 +40,7 @@ async function safeLogSync(connectionId: number, action: string, target: string,
 const accountTypeInput = z.enum(["oauth", "setup-token", "apikey", "upstream", "bedrock", "service_account"]);
 const statusInput = z.enum(["active", "inactive", "error"]);
 const jsonObjectInput = z.record(z.string(), z.unknown());
+const priorityStrategyInput = z.enum(["rate", "latency_rate"]);
 
 const accountWriteShape = {
   name: z.string().trim().min(1).max(100).optional(),
@@ -51,7 +52,7 @@ const accountWriteShape = {
   status: statusInput.optional(),
   schedulable: z.boolean().optional(),
   concurrency: z.number().int().min(0).max(100_000).optional(),
-  priority: z.number().int().min(0).max(100_000).optional(),
+  priority: z.number().int().min(0).max(maxAccountPriority).optional(),
   loadFactor: z.number().int().min(0).max(100_000).nullable().optional(),
   rateMultiplier: z.number().finite().min(0).max(100_000).optional(),
   groupIds: z.array(z.number().int().positive()).optional(),
@@ -71,7 +72,7 @@ const accountCreateInput = z.object({
   proxyId: z.number().int().min(0).nullable().optional(),
   schedulable: z.boolean().optional(),
   concurrency: z.number().int().min(0).max(100_000).optional(),
-  priority: z.number().int().min(0).max(100_000).optional(),
+  priority: z.number().int().min(0).max(maxAccountPriority).optional(),
   loadFactor: z.number().int().min(0).max(100_000).nullable().optional(),
   rateMultiplier: z.number().finite().min(0).max(100_000).optional(),
   groupIds: z.array(z.number().int().positive()).optional(),
@@ -208,11 +209,23 @@ export const accountsRouter = createTRPCRouter({
       connectionId: z.number().int().positive(),
       enabled: z.boolean(),
       targetGroupIds: z.array(z.number().int().positive()).max(500),
+      strategy: priorityStrategyInput.optional(),
+      sampleSize: z.number().int().min(1).max(200).optional(),
+      lookbackHours: z.number().int().min(1).max(720).optional(),
+      firstTokenCoefficient: z.number().finite().min(0).optional(),
+      rateCoefficient: z.number().finite().min(0).optional(),
+      missingSamplePenaltyMs: z.number().int().min(0).max(3_600_000).optional(),
     }))
     .mutation(async ({ input }) => {
       const rule = await saveAccountPriorityRule(input.connectionId, {
         enabled: input.enabled,
         targetGroupIds: input.targetGroupIds,
+        strategy: input.strategy,
+        sampleSize: input.sampleSize,
+        lookbackHours: input.lookbackHours,
+        firstTokenCoefficient: input.firstTokenCoefficient,
+        rateCoefficient: input.rateCoefficient,
+        missingSamplePenaltyMs: input.missingSamplePenaltyMs,
       });
       await safeLogSync(input.connectionId, "save_account_priority_rule", `connection:${input.connectionId}`, rule, "success");
       return rule;

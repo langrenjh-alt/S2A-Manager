@@ -5,9 +5,19 @@ import { getSetting, setSetting } from "@/server/settings";
 import { ratesEqual } from "@/server/rates";
 import { writeSyncLog } from "@/server/sync-logs";
 
+export const maxAccountPriority = 2_147_483_647;
+
+export type AccountPriorityStrategy = "rate" | "latency_rate";
+
 export type AccountPriorityRuleConfig = {
   enabled: boolean;
   targetGroupIds: number[];
+  strategy: AccountPriorityStrategy;
+  sampleSize: number;
+  lookbackHours: number;
+  firstTokenCoefficient: number;
+  rateCoefficient: number;
+  missingSamplePenaltyMs: number;
   updatedAt?: string | null;
 };
 
@@ -24,6 +34,7 @@ export type AccountPriorityApplyResult = {
   groups: Array<{ groupId: number; groupName: string; accountCount: number }>;
   updates: AccountPriorityUpdatePlan[];
   failures: Array<AccountPriorityUpdatePlan & { error: string }>;
+  sampleFailures: AccountPrioritySampleFailure[];
   message: string;
 };
 
@@ -34,6 +45,20 @@ type AccountPriorityUpdatePlan = {
   oldPriority: number | null;
   newPriority: number;
   matchedGroupIds: number[];
+  priorityScore?: number;
+  averageFirstTokenMs?: number;
+  validSampleCount?: number;
+  missingSampleCount?: number;
+  missingFillMs?: number;
+  sampleSize?: number;
+  lookbackHours?: number;
+};
+
+type AccountPrioritySampleFailure = {
+  accountId: number;
+  accountName: string;
+  matchedGroupIds: number[];
+  error: string;
 };
 
 type CandidateAccount = {
@@ -45,9 +70,28 @@ type CandidateAccount = {
   matchedGroupIds: number[];
 };
 
+type LatencyPriorityPlanRow = {
+  plan: AccountPriorityUpdatePlan | null;
+  failure: AccountPrioritySampleFailure | null;
+};
+
+const defaultSampleSize = 10;
+const defaultLookbackHours = 24;
+const defaultFirstTokenCoefficient = 1;
+const defaultRateCoefficient = 10_000;
+const defaultMissingSamplePenaltyMs = 300_000;
+const usageFetchConcurrency = 4;
+const usageFetchTimezone = "Asia/Shanghai";
+
 const defaultRule: AccountPriorityRuleConfig = {
   enabled: false,
   targetGroupIds: [],
+  strategy: "rate",
+  sampleSize: defaultSampleSize,
+  lookbackHours: defaultLookbackHours,
+  firstTokenCoefficient: defaultFirstTokenCoefficient,
+  rateCoefficient: defaultRateCoefficient,
+  missingSamplePenaltyMs: defaultMissingSamplePenaltyMs,
   updatedAt: null,
 };
 
@@ -62,6 +106,31 @@ function uniquePositiveIds(values: unknown[]) {
     .sort((left, right) => left - right);
 }
 
+function finiteNumber(value: unknown) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function normalizeInteger(value: unknown, fallback: number, min: number, max: number) {
+  const numeric = finiteNumber(value);
+  if (numeric === null) return fallback;
+  return clamp(Math.round(numeric), min, max);
+}
+
+function normalizeNonNegativeNumber(value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER) {
+  const numeric = finiteNumber(value);
+  if (numeric === null) return fallback;
+  return clamp(numeric, 0, max);
+}
+
+function normalizeStrategy(value: unknown): AccountPriorityStrategy {
+  return value === "latency_rate" ? "latency_rate" : "rate";
+}
+
 function normalizeRule(value: unknown): AccountPriorityRuleConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) return defaultRule;
   const raw = value as Partial<AccountPriorityRuleConfig>;
@@ -69,6 +138,12 @@ function normalizeRule(value: unknown): AccountPriorityRuleConfig {
   return {
     enabled: raw.enabled === true,
     targetGroupIds: uniquePositiveIds(Array.isArray(raw.targetGroupIds) ? raw.targetGroupIds : []),
+    strategy: normalizeStrategy(raw.strategy),
+    sampleSize: normalizeInteger(raw.sampleSize, defaultSampleSize, 1, 200),
+    lookbackHours: normalizeInteger(raw.lookbackHours, defaultLookbackHours, 1, 720),
+    firstTokenCoefficient: normalizeNonNegativeNumber(raw.firstTokenCoefficient, defaultFirstTokenCoefficient),
+    rateCoefficient: normalizeNonNegativeNumber(raw.rateCoefficient, defaultRateCoefficient),
+    missingSamplePenaltyMs: normalizeInteger(raw.missingSamplePenaltyMs, defaultMissingSamplePenaltyMs, 0, 3_600_000),
     updatedAt,
   };
 }
@@ -83,10 +158,21 @@ export async function readAccountPriorityRule(connectionId: number) {
   }
 }
 
-export async function saveAccountPriorityRule(connectionId: number, rule: Pick<AccountPriorityRuleConfig, "enabled" | "targetGroupIds">) {
+export async function saveAccountPriorityRule(
+  connectionId: number,
+  rule: Pick<AccountPriorityRuleConfig, "enabled" | "targetGroupIds"> & Partial<Omit<AccountPriorityRuleConfig, "enabled" | "targetGroupIds" | "updatedAt">>,
+) {
+  const current = await readAccountPriorityRule(connectionId);
   const normalized = normalizeRule({
+    ...current,
     enabled: rule.enabled,
     targetGroupIds: rule.targetGroupIds,
+    ...(rule.strategy !== undefined ? { strategy: rule.strategy } : {}),
+    ...(rule.sampleSize !== undefined ? { sampleSize: rule.sampleSize } : {}),
+    ...(rule.lookbackHours !== undefined ? { lookbackHours: rule.lookbackHours } : {}),
+    ...(rule.firstTokenCoefficient !== undefined ? { firstTokenCoefficient: rule.firstTokenCoefficient } : {}),
+    ...(rule.rateCoefficient !== undefined ? { rateCoefficient: rule.rateCoefficient } : {}),
+    ...(rule.missingSamplePenaltyMs !== undefined ? { missingSamplePenaltyMs: rule.missingSamplePenaltyMs } : {}),
     updatedAt: new Date().toISOString(),
   });
   if (normalized.enabled && normalized.targetGroupIds.length === 0) {
@@ -151,7 +237,7 @@ function buildCandidates(input: {
   return { candidates: Array.from(candidateById.values()), groups, skipped };
 }
 
-function planPriorityUpdates(candidates: CandidateAccount[]) {
+function planRatePriorityUpdates(candidates: CandidateAccount[]) {
   const sorted = [...candidates].sort((left, right) => {
     const leftRate = left.rateMultiplier ?? 0;
     const rightRate = right.rateMultiplier ?? 0;
@@ -184,10 +270,159 @@ function planPriorityUpdates(candidates: CandidateAccount[]) {
   return plans;
 }
 
+function priorityFromScore(value: number) {
+  if (!Number.isFinite(value)) return maxAccountPriority;
+  return clamp(Math.ceil(value), 0, maxAccountPriority);
+}
+
+function parseCreatedAt(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function datePartInTimezone(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return year && month && day ? `${year}-${month}-${day}` : date.toISOString().slice(0, 10);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await task(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+async function planLatencyPriorityUpdates(input: {
+  candidates: CandidateAccount[];
+  s2Client: Sub2ApiAdminClient;
+  rule: AccountPriorityRuleConfig;
+  now: Date;
+}) {
+  const cutoff = new Date(input.now.getTime() - input.rule.lookbackHours * 60 * 60 * 1000);
+  const startDate = datePartInTimezone(cutoff, usageFetchTimezone);
+  const endDate = datePartInTimezone(input.now, usageFetchTimezone);
+
+  const rows = await mapWithConcurrency<CandidateAccount, LatencyPriorityPlanRow>(input.candidates, usageFetchConcurrency, async (candidate) => {
+    const rateMultiplier = candidate.rateMultiplier;
+    if (rateMultiplier === null) return { plan: null, failure: null };
+
+    try {
+      const samples: Array<{ firstTokenMs: number; createdAt: Date }> = [];
+      const pageSize = 200;
+      for (let page = 1; samples.length < input.rule.sampleSize; page += 1) {
+        const usageLogs = await input.s2Client.listUsageLogs({
+          accountId: candidate.accountId,
+          stream: true,
+          startDate,
+          endDate,
+          timezone: usageFetchTimezone,
+          page,
+          pageSize,
+          sortBy: "created_at",
+          sortOrder: "desc",
+          exactTotal: false,
+        });
+        if (usageLogs.length === 0) break;
+
+        let oldestInPage: Date | null = null;
+        for (const log of usageLogs) {
+          const createdAt = parseCreatedAt(log.created_at);
+          if (createdAt && (oldestInPage === null || createdAt.getTime() < oldestInPage.getTime())) {
+            oldestInPage = createdAt;
+          }
+          if (log.stream !== true || log.account_id !== candidate.accountId) continue;
+          if (!createdAt || createdAt.getTime() < cutoff.getTime()) continue;
+          if (log.first_token_ms === null || !Number.isInteger(log.first_token_ms) || log.first_token_ms < 0) continue;
+          samples.push({ firstTokenMs: log.first_token_ms, createdAt });
+          if (samples.length >= input.rule.sampleSize) break;
+        }
+
+        if (usageLogs.length < pageSize) break;
+        if (!oldestInPage || oldestInPage.getTime() < cutoff.getTime()) break;
+      }
+
+      const validSampleCount = samples.length;
+      const missingSampleCount = input.rule.sampleSize - validSampleCount;
+      const sampleTotal = samples.reduce((total, sample) => total + sample.firstTokenMs, 0);
+      const missingFillMs = validSampleCount > 0 ? input.rule.missingSamplePenaltyMs : 0;
+      const averageFirstTokenMs = (sampleTotal + missingSampleCount * missingFillMs) / input.rule.sampleSize;
+      const priorityScore = priorityFromScore(
+        averageFirstTokenMs * input.rule.firstTokenCoefficient
+        + rateMultiplier * input.rule.rateCoefficient,
+      );
+
+      return {
+        plan: {
+          accountId: candidate.accountId,
+          accountName: candidate.accountName,
+          rateMultiplier,
+          oldPriority: candidate.oldPriority,
+          newPriority: priorityScore,
+          matchedGroupIds: candidate.matchedGroupIds,
+          priorityScore,
+          averageFirstTokenMs,
+          validSampleCount,
+          missingSampleCount,
+          missingFillMs,
+          sampleSize: input.rule.sampleSize,
+          lookbackHours: input.rule.lookbackHours,
+        } satisfies AccountPriorityUpdatePlan,
+        failure: null,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        plan: null,
+        failure: {
+          accountId: candidate.accountId,
+          accountName: candidate.accountName,
+          matchedGroupIds: candidate.matchedGroupIds,
+          error: message,
+        } satisfies AccountPrioritySampleFailure,
+      };
+    }
+  });
+
+  const sampleFailures = rows
+    .map((row) => row.failure)
+    .filter((failure): failure is AccountPrioritySampleFailure => Boolean(failure));
+  const plans = rows
+    .map((row) => row.plan)
+    .filter((plan): plan is AccountPriorityUpdatePlan => Boolean(plan))
+    .sort((left, right) => {
+      if (left.newPriority !== right.newPriority) return left.newPriority - right.newPriority;
+      if (!ratesEqual(left.rateMultiplier, right.rateMultiplier)) return left.rateMultiplier - right.rateMultiplier;
+      const leftLatency = left.averageFirstTokenMs ?? Number.MAX_SAFE_INTEGER;
+      const rightLatency = right.averageFirstTokenMs ?? Number.MAX_SAFE_INTEGER;
+      if (leftLatency !== rightLatency) return leftLatency - rightLatency;
+      const nameDiff = left.accountName.localeCompare(right.accountName, "zh-CN");
+      return nameDiff === 0 ? left.accountId - right.accountId : nameDiff;
+    });
+
+  return { plans, sampleFailures };
+}
+
 async function logPriorityResult(input: {
   db: unknown;
   connectionId: number;
   action: string;
+  rule: AccountPriorityRuleConfig;
   result: AccountPriorityApplyResult;
 }) {
   if (input.result.skipped) return;
@@ -197,6 +432,12 @@ async function logPriorityResult(input: {
       action: input.action,
       target: `connection:${input.connectionId}`,
       detail: {
+        strategy: input.rule.strategy,
+        sampleSize: input.rule.sampleSize,
+        lookbackHours: input.rule.lookbackHours,
+        firstTokenCoefficient: input.rule.firstTokenCoefficient,
+        rateCoefficient: input.rule.rateCoefficient,
+        missingSamplePenaltyMs: input.rule.missingSamplePenaltyMs,
         targetGroupIds: input.result.targetGroupIds,
         matchedAccounts: input.result.matchedAccounts,
         updated: input.result.updated,
@@ -206,9 +447,10 @@ async function logPriorityResult(input: {
         groups: input.result.groups,
         updates: input.result.updates.slice(0, 120),
         failures: input.result.failures.slice(0, 40),
+        sampleFailures: input.result.sampleFailures.slice(0, 40),
       },
       status: input.result.ok ? "success" : "failed",
-      error: input.result.ok ? undefined : `${input.result.failed} 个账号优先级更新失败`,
+      error: input.result.ok ? undefined : `${input.result.failed} 个账号优先级处理失败`,
     });
   } catch {
     // Logging must not hide the remote operation result.
@@ -242,6 +484,7 @@ export async function applyAccountPriorityRule(input: {
       groups: [],
       updates: [],
       failures: [],
+      sampleFailures: [],
       message: "priority rule disabled",
     };
   }
@@ -255,7 +498,9 @@ export async function applyAccountPriorityRule(input: {
     input.groups ? Promise.resolve(input.groups) : input.s2Client.listGroups().catch(() => []),
   ]);
   const { candidates, groups: groupSummaries, skipped } = buildCandidates({ accounts, groups, targetGroupIds });
-  const plans = planPriorityUpdates(candidates);
+  const { plans, sampleFailures } = rule.strategy === "latency_rate"
+    ? await planLatencyPriorityUpdates({ candidates, s2Client: input.s2Client, rule, now: new Date() })
+    : { plans: planRatePriorityUpdates(candidates), sampleFailures: [] };
   const updates = plans.filter((plan) => plan.oldPriority !== plan.newPriority);
   const unchanged = plans.length - updates.length;
   const applied: AccountPriorityUpdatePlan[] = [];
@@ -272,7 +517,7 @@ export async function applyAccountPriorityRule(input: {
   }
 
   const result: AccountPriorityApplyResult = {
-    ok: failures.length === 0,
+    ok: failures.length === 0 && sampleFailures.length === 0,
     skipped: false,
     enabled: true,
     targetGroupIds,
@@ -280,17 +525,19 @@ export async function applyAccountPriorityRule(input: {
     updated: applied.length,
     unchanged,
     skippedAccounts: skipped.length,
-    failed: failures.length,
+    failed: failures.length + sampleFailures.length,
     groups: groupSummaries,
     updates: applied,
     failures,
-    message: failures.length === 0 ? "priority rule applied" : "priority rule partially failed",
+    sampleFailures,
+    message: failures.length === 0 && sampleFailures.length === 0 ? "priority rule applied" : "priority rule partially failed",
   };
 
   await logPriorityResult({
     db: input.db,
     connectionId: input.connectionId,
     action,
+    rule,
     result,
   });
 

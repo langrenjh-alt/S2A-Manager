@@ -51,6 +51,7 @@ type AccountStatus = "active" | "inactive" | "error";
 type FormMode = "create" | "edit";
 type RuleMode = "first" | "average" | "min" | "max" | "custom";
 type AccountPlatformFilter = "all" | "openai" | "anthropic";
+type PriorityRuleStrategy = "rate" | "latency_rate";
 
 type AccountRow = {
   id: number;
@@ -215,6 +216,13 @@ const defaultRule: Omit<AccountRateRule, "accountId"> = {
 
 const accountTypes: AccountType[] = ["oauth", "setup-token", "apikey", "upstream", "bedrock", "service_account"];
 const statuses: AccountStatus[] = ["active", "inactive", "error"];
+const maxAccountPriority = 2_147_483_647;
+const defaultPriorityRuleStrategy: PriorityRuleStrategy = "rate";
+const defaultPriorityRuleSampleSize = "10";
+const defaultPriorityRuleLookbackHours = "24";
+const defaultPriorityRuleFirstTokenCoefficient = "1";
+const defaultPriorityRuleRateCoefficient = "10000";
+const defaultPriorityRuleMissingSamplePenaltyMs = "300000";
 const accountPlatformFilters: Array<{ value: AccountPlatformFilter; label: string }> = [
   { value: "all", label: "全部平台" },
   { value: "openai", label: "openai" },
@@ -506,6 +514,18 @@ function parseJsonObject(value: string, label: string) {
 function parseRequiredInt(value: string, label: string) {
   const numeric = Number(value);
   if (!Number.isInteger(numeric) || numeric < 0) throw new Error(`${label}必须是大于等于 0 的整数`);
+  return numeric;
+}
+
+function parseBoundedInt(value: string, label: string, min: number, max: number) {
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < min || numeric > max) throw new Error(`${label}必须是 ${min}-${max} 的整数`);
+  return numeric;
+}
+
+function parseNonNegativeNumber(value: string, label: string) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) throw new Error(`${label}必须是大于等于 0 的有效数字`);
   return numeric;
 }
 
@@ -923,6 +943,12 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
   const [accountPlatformFilter, setAccountPlatformFilter] = useState<AccountPlatformFilter>("all");
   const [priorityRuleEnabled, setPriorityRuleEnabled] = useState(false);
   const [priorityRuleGroupIds, setPriorityRuleGroupIds] = useState<number[]>([]);
+  const [priorityRuleStrategy, setPriorityRuleStrategy] = useState<PriorityRuleStrategy>(defaultPriorityRuleStrategy);
+  const [priorityRuleSampleSize, setPriorityRuleSampleSize] = useState(defaultPriorityRuleSampleSize);
+  const [priorityRuleLookbackHours, setPriorityRuleLookbackHours] = useState(defaultPriorityRuleLookbackHours);
+  const [priorityRuleFirstTokenCoefficient, setPriorityRuleFirstTokenCoefficient] = useState(defaultPriorityRuleFirstTokenCoefficient);
+  const [priorityRuleRateCoefficient, setPriorityRuleRateCoefficient] = useState(defaultPriorityRuleRateCoefficient);
+  const [priorityRuleMissingSamplePenaltyMs, setPriorityRuleMissingSamplePenaltyMs] = useState(defaultPriorityRuleMissingSamplePenaltyMs);
   const [priorityRuleSearch, setPriorityRuleSearch] = useState("");
   const [priorityRuleDirty, setPriorityRuleDirty] = useState(false);
   const [balanceWebhookEnabled, setBalanceWebhookEnabled] = useState(false);
@@ -1118,6 +1144,12 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
     if (!rule || priorityRuleDirty) return;
     setPriorityRuleEnabled(rule.enabled === true);
     setPriorityRuleGroupIds(uniqueNumbers(Array.isArray(rule.targetGroupIds) ? rule.targetGroupIds : []));
+    setPriorityRuleStrategy(rule.strategy === "latency_rate" ? "latency_rate" : "rate");
+    setPriorityRuleSampleSize(asNumberString(rule.sampleSize, defaultPriorityRuleSampleSize));
+    setPriorityRuleLookbackHours(asNumberString(rule.lookbackHours, defaultPriorityRuleLookbackHours));
+    setPriorityRuleFirstTokenCoefficient(asNumberString(rule.firstTokenCoefficient, defaultPriorityRuleFirstTokenCoefficient));
+    setPriorityRuleRateCoefficient(asNumberString(rule.rateCoefficient, defaultPriorityRuleRateCoefficient));
+    setPriorityRuleMissingSamplePenaltyMs(asNumberString(rule.missingSamplePenaltyMs, defaultPriorityRuleMissingSamplePenaltyMs));
   }, [priorityRuleDirty, priorityRuleQuery.data]);
 
   const createAccount = trpc.accounts.create.useMutation();
@@ -1343,14 +1375,29 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
       if (priorityRuleEnabled && targetGroupIds.length === 0) {
         throw new Error("启用规则时至少选择一个 Sub2API 分组");
       }
-      const saved = await savePriorityRule.mutateAsync({
+      const payload: Parameters<typeof savePriorityRule.mutateAsync>[0] = {
         connectionId,
         enabled: priorityRuleEnabled,
         targetGroupIds,
-      });
+        strategy: priorityRuleStrategy,
+      };
+      if (priorityRuleStrategy === "latency_rate") {
+        payload.sampleSize = parseBoundedInt(priorityRuleSampleSize, "样本数", 1, 200);
+        payload.lookbackHours = parseBoundedInt(priorityRuleLookbackHours, "回看小时", 1, 720);
+        payload.firstTokenCoefficient = parseNonNegativeNumber(priorityRuleFirstTokenCoefficient, "首字系数");
+        payload.rateCoefficient = parseNonNegativeNumber(priorityRuleRateCoefficient, "倍率系数");
+        payload.missingSamplePenaltyMs = parseBoundedInt(priorityRuleMissingSamplePenaltyMs, "缺样填充值", 0, 3_600_000);
+      }
+      const saved = await savePriorityRule.mutateAsync(payload);
       setPriorityRuleDirty(false);
       setPriorityRuleEnabled(saved.enabled);
       setPriorityRuleGroupIds(uniqueNumbers(saved.targetGroupIds));
+      setPriorityRuleStrategy(saved.strategy === "latency_rate" ? "latency_rate" : "rate");
+      setPriorityRuleSampleSize(asNumberString(saved.sampleSize, defaultPriorityRuleSampleSize));
+      setPriorityRuleLookbackHours(asNumberString(saved.lookbackHours, defaultPriorityRuleLookbackHours));
+      setPriorityRuleFirstTokenCoefficient(asNumberString(saved.firstTokenCoefficient, defaultPriorityRuleFirstTokenCoefficient));
+      setPriorityRuleRateCoefficient(asNumberString(saved.rateCoefficient, defaultPriorityRuleRateCoefficient));
+      setPriorityRuleMissingSamplePenaltyMs(asNumberString(saved.missingSamplePenaltyMs, defaultPriorityRuleMissingSamplePenaltyMs));
       await Promise.all([
         priorityRuleQuery.refetch(),
         utils.sync.logs.invalidate(),
@@ -1362,7 +1409,21 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
       showToast({ title: "保存调度优先级规则失败", description: message, variant: "error" });
       return null;
     }
-  }, [connectionId, priorityRuleEnabled, priorityRuleGroupIds, priorityRuleQuery, savePriorityRule, showToast, utils.sync.logs]);
+  }, [
+    connectionId,
+    priorityRuleEnabled,
+    priorityRuleFirstTokenCoefficient,
+    priorityRuleGroupIds,
+    priorityRuleLookbackHours,
+    priorityRuleMissingSamplePenaltyMs,
+    priorityRuleQuery,
+    priorityRuleRateCoefficient,
+    priorityRuleSampleSize,
+    priorityRuleStrategy,
+    savePriorityRule,
+    showToast,
+    utils.sync.logs,
+  ]);
 
   const handleApplyPriorityRule = useCallback(async () => {
     const saved = await handleSavePriorityRule();
@@ -1480,7 +1541,7 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
         proxyId: clearableNumber(parseOptionalPositiveInt(form.proxyId, "代理 ID"), formMode),
         schedulable: formMode === "create" || dirty.schedulable ? form.schedulable : undefined,
         concurrency: parseRequiredInt(form.concurrency, "并发数"),
-        priority: parseRequiredInt(form.priority, "优先级"),
+        priority: parseBoundedInt(form.priority, "优先级", 0, maxAccountPriority),
         loadFactor: parseOptionalNonNegativeInt(form.loadFactor, "负载权重"),
         rateMultiplier: parseRate(form.rateMultiplier),
         groupIds: uniqueNumbers(selectedGroupIds),
@@ -1800,7 +1861,11 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="space-y-1">
               <CardTitle>调度优先级规则</CardTitle>
-              <CardDescription>按所选分组内账号倍率从低到高写入 Sub2API 账号优先级；相同倍率使用相同优先级。</CardDescription>
+              <CardDescription>
+                {priorityRuleStrategy === "latency_rate"
+                  ? "按账号最近流式请求首字时间与账号倍率计算 Sub2API 账号优先级。"
+                  : "按所选分组内账号倍率从低到高写入 Sub2API 账号优先级；相同倍率使用相同优先级。"}
+              </CardDescription>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">{priorityRuleEnabled ? "已启用" : "已停用"}</span>
@@ -1872,8 +1937,104 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
                   <div className="mt-1 text-2xl font-semibold">{priorityRuleGroupIds.length}</div>
                 </div>
               </div>
+              <div className="space-y-2">
+                <Label>调度策略</Label>
+                <Select
+                  value={priorityRuleStrategy}
+                  onValueChange={(value) => {
+                    setPriorityRuleDirty(true);
+                    setPriorityRuleStrategy(value as PriorityRuleStrategy);
+                  }}
+                  disabled={isPriorityRuleSaving || priorityRuleQuery.isLoading}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="rate">账号倍率</SelectItem>
+                    <SelectItem value="latency_rate">首字时间 + 倍率</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {priorityRuleStrategy === "latency_rate" ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>样本数</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="200"
+                      step="1"
+                      value={priorityRuleSampleSize}
+                      onChange={(event) => {
+                        setPriorityRuleDirty(true);
+                        setPriorityRuleSampleSize(event.target.value);
+                      }}
+                      disabled={isPriorityRuleSaving}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>回看小时</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="720"
+                      step="1"
+                      value={priorityRuleLookbackHours}
+                      onChange={(event) => {
+                        setPriorityRuleDirty(true);
+                        setPriorityRuleLookbackHours(event.target.value);
+                      }}
+                      disabled={isPriorityRuleSaving}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>首字系数</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={priorityRuleFirstTokenCoefficient}
+                      onChange={(event) => {
+                        setPriorityRuleDirty(true);
+                        setPriorityRuleFirstTokenCoefficient(event.target.value);
+                      }}
+                      disabled={isPriorityRuleSaving}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>倍率系数</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={priorityRuleRateCoefficient}
+                      onChange={(event) => {
+                        setPriorityRuleDirty(true);
+                        setPriorityRuleRateCoefficient(event.target.value);
+                      }}
+                      disabled={isPriorityRuleSaving}
+                    />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label>缺样填充值 ms</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="3600000"
+                      step="1"
+                      value={priorityRuleMissingSamplePenaltyMs}
+                      onChange={(event) => {
+                        setPriorityRuleDirty(true);
+                        setPriorityRuleMissingSamplePenaltyMs(event.target.value);
+                      }}
+                      disabled={isPriorityRuleSaving}
+                    />
+                  </div>
+                </div>
+              ) : null}
               <div className="text-xs leading-5 text-muted-foreground">
-                立即应用会先保存当前规则，再按账号当前倍率排序写入优先级 1、2、3。
+                {priorityRuleStrategy === "latency_rate"
+                  ? "立即应用会先保存当前规则，再按账号全局流式记录采样；0 样本账号按倍率探索，样本不足时用缺样填充值补齐。"
+                  : "立即应用会先保存当前规则，再按账号当前倍率排序写入优先级 1、2、3。"}
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={handleSavePriorityRule} disabled={isPriorityRuleSaving || priorityRuleQuery.isLoading}>
