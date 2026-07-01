@@ -14,7 +14,7 @@ export type AccountPriorityRuleConfig = {
   targetGroupIds: number[];
   strategy: AccountPriorityStrategy;
   sampleSize: number;
-  lookbackHours: number;
+  lookbackMinutes: number;
   firstTokenCoefficient: number;
   rateCoefficient: number;
   missingSamplePenaltyMs: number;
@@ -51,7 +51,7 @@ type AccountPriorityUpdatePlan = {
   missingSampleCount?: number;
   missingFillMs?: number;
   sampleSize?: number;
-  lookbackHours?: number;
+  lookbackMinutes?: number;
 };
 
 type AccountPrioritySampleFailure = {
@@ -76,10 +76,11 @@ type LatencyPriorityPlanRow = {
 };
 
 const defaultSampleSize = 10;
-const defaultLookbackHours = 24;
+const defaultLookbackMinutes = 60;
+const maxLookbackMinutes = 720 * 60;
 const defaultFirstTokenCoefficient = 1;
 const defaultRateCoefficient = 10_000;
-const defaultMissingSamplePenaltyMs = 300_000;
+const defaultMissingSamplePenaltyMs = 5_000;
 const usageFetchConcurrency = 4;
 const usageFetchTimezone = "Asia/Shanghai";
 
@@ -88,7 +89,7 @@ const defaultRule: AccountPriorityRuleConfig = {
   targetGroupIds: [],
   strategy: "rate",
   sampleSize: defaultSampleSize,
-  lookbackHours: defaultLookbackHours,
+  lookbackMinutes: defaultLookbackMinutes,
   firstTokenCoefficient: defaultFirstTokenCoefficient,
   rateCoefficient: defaultRateCoefficient,
   missingSamplePenaltyMs: defaultMissingSamplePenaltyMs,
@@ -131,16 +132,24 @@ function normalizeStrategy(value: unknown): AccountPriorityStrategy {
   return value === "latency_rate" ? "latency_rate" : "rate";
 }
 
+function normalizeLookbackMinutes(value: unknown, legacyHours: unknown) {
+  if (value !== undefined) return normalizeInteger(value, defaultLookbackMinutes, 1, maxLookbackMinutes);
+  if (legacyHours !== undefined) {
+    return clamp(normalizeInteger(legacyHours, Math.ceil(defaultLookbackMinutes / 60), 1, 720) * 60, 1, maxLookbackMinutes);
+  }
+  return defaultLookbackMinutes;
+}
+
 function normalizeRule(value: unknown): AccountPriorityRuleConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) return defaultRule;
-  const raw = value as Partial<AccountPriorityRuleConfig>;
+  const raw = value as Partial<AccountPriorityRuleConfig> & { lookbackHours?: unknown };
   const updatedAt = typeof raw.updatedAt === "string" ? raw.updatedAt : null;
   return {
     enabled: raw.enabled === true,
     targetGroupIds: uniquePositiveIds(Array.isArray(raw.targetGroupIds) ? raw.targetGroupIds : []),
     strategy: normalizeStrategy(raw.strategy),
     sampleSize: normalizeInteger(raw.sampleSize, defaultSampleSize, 1, 200),
-    lookbackHours: normalizeInteger(raw.lookbackHours, defaultLookbackHours, 1, 720),
+    lookbackMinutes: normalizeLookbackMinutes(raw.lookbackMinutes, raw.lookbackHours),
     firstTokenCoefficient: normalizeNonNegativeNumber(raw.firstTokenCoefficient, defaultFirstTokenCoefficient),
     rateCoefficient: normalizeNonNegativeNumber(raw.rateCoefficient, defaultRateCoefficient),
     missingSamplePenaltyMs: normalizeInteger(raw.missingSamplePenaltyMs, defaultMissingSamplePenaltyMs, 0, 3_600_000),
@@ -160,16 +169,21 @@ export async function readAccountPriorityRule(connectionId: number) {
 
 export async function saveAccountPriorityRule(
   connectionId: number,
-  rule: Pick<AccountPriorityRuleConfig, "enabled" | "targetGroupIds"> & Partial<Omit<AccountPriorityRuleConfig, "enabled" | "targetGroupIds" | "updatedAt">>,
+  rule: Pick<AccountPriorityRuleConfig, "enabled" | "targetGroupIds"> & Partial<Omit<AccountPriorityRuleConfig, "enabled" | "targetGroupIds" | "updatedAt">> & { lookbackHours?: number },
 ) {
   const current = await readAccountPriorityRule(connectionId);
+  const lookbackInput = rule.lookbackMinutes !== undefined
+    ? { lookbackMinutes: rule.lookbackMinutes }
+    : rule.lookbackHours !== undefined
+      ? { lookbackMinutes: undefined, lookbackHours: rule.lookbackHours }
+      : {};
   const normalized = normalizeRule({
     ...current,
     enabled: rule.enabled,
     targetGroupIds: rule.targetGroupIds,
     ...(rule.strategy !== undefined ? { strategy: rule.strategy } : {}),
     ...(rule.sampleSize !== undefined ? { sampleSize: rule.sampleSize } : {}),
-    ...(rule.lookbackHours !== undefined ? { lookbackHours: rule.lookbackHours } : {}),
+    ...lookbackInput,
     ...(rule.firstTokenCoefficient !== undefined ? { firstTokenCoefficient: rule.firstTokenCoefficient } : {}),
     ...(rule.rateCoefficient !== undefined ? { rateCoefficient: rule.rateCoefficient } : {}),
     ...(rule.missingSamplePenaltyMs !== undefined ? { missingSamplePenaltyMs: rule.missingSamplePenaltyMs } : {}),
@@ -314,7 +328,7 @@ async function planLatencyPriorityUpdates(input: {
   rule: AccountPriorityRuleConfig;
   now: Date;
 }) {
-  const cutoff = new Date(input.now.getTime() - input.rule.lookbackHours * 60 * 60 * 1000);
+  const cutoff = new Date(input.now.getTime() - input.rule.lookbackMinutes * 60 * 1000);
   const startDate = datePartInTimezone(cutoff, usageFetchTimezone);
   const endDate = datePartInTimezone(input.now, usageFetchTimezone);
 
@@ -381,7 +395,7 @@ async function planLatencyPriorityUpdates(input: {
           missingSampleCount,
           missingFillMs,
           sampleSize: input.rule.sampleSize,
-          lookbackHours: input.rule.lookbackHours,
+          lookbackMinutes: input.rule.lookbackMinutes,
         } satisfies AccountPriorityUpdatePlan,
         failure: null,
       };
@@ -434,7 +448,7 @@ async function logPriorityResult(input: {
       detail: {
         strategy: input.rule.strategy,
         sampleSize: input.rule.sampleSize,
-        lookbackHours: input.rule.lookbackHours,
+        lookbackMinutes: input.rule.lookbackMinutes,
         firstTokenCoefficient: input.rule.firstTokenCoefficient,
         rateCoefficient: input.rule.rateCoefficient,
         missingSamplePenaltyMs: input.rule.missingSamplePenaltyMs,

@@ -219,10 +219,10 @@ const statuses: AccountStatus[] = ["active", "inactive", "error"];
 const maxAccountPriority = 2_147_483_647;
 const defaultPriorityRuleStrategy: PriorityRuleStrategy = "rate";
 const defaultPriorityRuleSampleSize = "10";
-const defaultPriorityRuleLookbackHours = "24";
+const defaultPriorityRuleLookbackMinutes = "60";
 const defaultPriorityRuleFirstTokenCoefficient = "1";
 const defaultPriorityRuleRateCoefficient = "10000";
-const defaultPriorityRuleMissingSamplePenaltyMs = "300000";
+const defaultPriorityRuleMissingSamplePenaltyMs = "5000";
 const accountPlatformFilters: Array<{ value: AccountPlatformFilter; label: string }> = [
   { value: "all", label: "全部平台" },
   { value: "openai", label: "openai" },
@@ -945,7 +945,7 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
   const [priorityRuleGroupIds, setPriorityRuleGroupIds] = useState<number[]>([]);
   const [priorityRuleStrategy, setPriorityRuleStrategy] = useState<PriorityRuleStrategy>(defaultPriorityRuleStrategy);
   const [priorityRuleSampleSize, setPriorityRuleSampleSize] = useState(defaultPriorityRuleSampleSize);
-  const [priorityRuleLookbackHours, setPriorityRuleLookbackHours] = useState(defaultPriorityRuleLookbackHours);
+  const [priorityRuleLookbackMinutes, setPriorityRuleLookbackMinutes] = useState(defaultPriorityRuleLookbackMinutes);
   const [priorityRuleFirstTokenCoefficient, setPriorityRuleFirstTokenCoefficient] = useState(defaultPriorityRuleFirstTokenCoefficient);
   const [priorityRuleRateCoefficient, setPriorityRuleRateCoefficient] = useState(defaultPriorityRuleRateCoefficient);
   const [priorityRuleMissingSamplePenaltyMs, setPriorityRuleMissingSamplePenaltyMs] = useState(defaultPriorityRuleMissingSamplePenaltyMs);
@@ -1146,7 +1146,7 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
     setPriorityRuleGroupIds(uniqueNumbers(Array.isArray(rule.targetGroupIds) ? rule.targetGroupIds : []));
     setPriorityRuleStrategy(rule.strategy === "latency_rate" ? "latency_rate" : "rate");
     setPriorityRuleSampleSize(asNumberString(rule.sampleSize, defaultPriorityRuleSampleSize));
-    setPriorityRuleLookbackHours(asNumberString(rule.lookbackHours, defaultPriorityRuleLookbackHours));
+    setPriorityRuleLookbackMinutes(asNumberString(rule.lookbackMinutes, defaultPriorityRuleLookbackMinutes));
     setPriorityRuleFirstTokenCoefficient(asNumberString(rule.firstTokenCoefficient, defaultPriorityRuleFirstTokenCoefficient));
     setPriorityRuleRateCoefficient(asNumberString(rule.rateCoefficient, defaultPriorityRuleRateCoefficient));
     setPriorityRuleMissingSamplePenaltyMs(asNumberString(rule.missingSamplePenaltyMs, defaultPriorityRuleMissingSamplePenaltyMs));
@@ -1383,7 +1383,7 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
       };
       if (priorityRuleStrategy === "latency_rate") {
         payload.sampleSize = parseBoundedInt(priorityRuleSampleSize, "样本数", 1, 200);
-        payload.lookbackHours = parseBoundedInt(priorityRuleLookbackHours, "回看小时", 1, 720);
+        payload.lookbackMinutes = parseBoundedInt(priorityRuleLookbackMinutes, "回看分钟", 1, 720 * 60);
         payload.firstTokenCoefficient = parseNonNegativeNumber(priorityRuleFirstTokenCoefficient, "首字系数");
         payload.rateCoefficient = parseNonNegativeNumber(priorityRuleRateCoefficient, "倍率系数");
         payload.missingSamplePenaltyMs = parseBoundedInt(priorityRuleMissingSamplePenaltyMs, "缺样填充值", 0, 3_600_000);
@@ -1394,7 +1394,7 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
       setPriorityRuleGroupIds(uniqueNumbers(saved.targetGroupIds));
       setPriorityRuleStrategy(saved.strategy === "latency_rate" ? "latency_rate" : "rate");
       setPriorityRuleSampleSize(asNumberString(saved.sampleSize, defaultPriorityRuleSampleSize));
-      setPriorityRuleLookbackHours(asNumberString(saved.lookbackHours, defaultPriorityRuleLookbackHours));
+      setPriorityRuleLookbackMinutes(asNumberString(saved.lookbackMinutes, defaultPriorityRuleLookbackMinutes));
       setPriorityRuleFirstTokenCoefficient(asNumberString(saved.firstTokenCoefficient, defaultPriorityRuleFirstTokenCoefficient));
       setPriorityRuleRateCoefficient(asNumberString(saved.rateCoefficient, defaultPriorityRuleRateCoefficient));
       setPriorityRuleMissingSamplePenaltyMs(asNumberString(saved.missingSamplePenaltyMs, defaultPriorityRuleMissingSamplePenaltyMs));
@@ -1414,7 +1414,7 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
     priorityRuleEnabled,
     priorityRuleFirstTokenCoefficient,
     priorityRuleGroupIds,
-    priorityRuleLookbackHours,
+    priorityRuleLookbackMinutes,
     priorityRuleMissingSamplePenaltyMs,
     priorityRuleQuery,
     priorityRuleRateCoefficient,
@@ -1972,16 +1972,16 @@ export function AccountsPanel({ connectionId }: { connectionId: number }) {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>回看小时</Label>
+                    <Label>回看分钟</Label>
                     <Input
                       type="number"
                       min="1"
-                      max="720"
+                      max={720 * 60}
                       step="1"
-                      value={priorityRuleLookbackHours}
+                      value={priorityRuleLookbackMinutes}
                       onChange={(event) => {
                         setPriorityRuleDirty(true);
-                        setPriorityRuleLookbackHours(event.target.value);
+                        setPriorityRuleLookbackMinutes(event.target.value);
                       }}
                       disabled={isPriorityRuleSaving}
                     />
