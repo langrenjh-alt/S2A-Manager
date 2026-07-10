@@ -1,13 +1,10 @@
 import { PrismaClient } from "@prisma/client";
-import { BlPublicClient, resolveBlChangeNewValue, type BlChange } from "@/server/clients/bl-public";
-import { Sub2ApiAdminClient, type Sub2ApiGroup } from "@/server/clients/sub2api-admin";
+import { Sub2ApiAdminClient } from "@/server/clients/sub2api-admin";
 import { decrypt } from "@/server/crypto";
 import { collectDueBlCollectionSites } from "@/server/bl-collection/collector";
-import { applyBoundRateRules, applyBoundRateRulesForConnection } from "@/server/bl-rate-sync";
-import { publishRateChangeAnnouncements } from "@/server/announcement-rules";
+import { applyBoundRateRulesForConnection } from "@/server/bl-rate-sync";
 import { runDueUpstreamMonitors } from "@/server/upstream-monitor";
 import { normalizeWorkerIntervalSeconds, workerRuntimeSettingsFromRows } from "@/server/worker-settings";
-import { normalizeRateMultiplier, ratesEqual } from "@/server/rates";
 import { cleanupOldLogs, writeSyncLog } from "@/server/sync-logs";
 import { checkAccountBalanceAlerts } from "@/server/account-balance-alert";
 
@@ -16,34 +13,6 @@ const runOnce = process.env.S2A_WORKER_ONCE === "1";
 let currentWorkerIntervalSeconds = normalizeWorkerIntervalSeconds(process.env.S2A_WORKER_INTERVAL_SECONDS);
 let stopping = false;
 let wakeDelay: (() => void) | null = null;
-
-function changeTime(change: BlChange) {
-  const timestamp = new Date(change.created_at).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function latestChangesSince(changes: BlChange[], since?: Date | null) {
-  const cutoff = since?.getTime() ?? 0;
-  const bySourceGroup = new Map<string, BlChange>();
-  for (const change of changes) {
-    if (changeTime(change) <= cutoff) continue;
-    const key = sourceKey(change.site_id, change.group_id);
-    const current = bySourceGroup.get(key);
-    if (!current || changeTime(change) > changeTime(current)) {
-      bySourceGroup.set(key, change);
-    }
-  }
-  return Array.from(bySourceGroup.values()).sort((a, b) => changeTime(a) - changeTime(b));
-}
-
-function sourceKey(siteId: number, groupId: string) {
-  return `${siteId}:${groupId}`;
-}
-
-function findTargetGroup(change: BlChange, groups: Sub2ApiGroup[]) {
-  return groups.find((group) => String(group.id) === change.group_id)
-    ?? groups.find((group) => change.group_name && group.name.trim() === change.group_name.trim());
-}
 
 async function logSync(connectionId: number, action: string, target: string, detail: Record<string, unknown>, status: "success" | "failed", error?: string) {
   try {
@@ -121,10 +90,6 @@ function settingDate(settings: Map<string, string>, key: string) {
   if (!raw) return null;
   const date = new Date(raw);
   return Number.isFinite(date.getTime()) ? date : null;
-}
-
-function sameRate(left: number, right: number) {
-  return ratesEqual(left, right);
 }
 
 async function runDueBalanceAlerts(settings: Map<string, string>, accountBalanceAlertIntervalSeconds: number) {
@@ -245,109 +210,15 @@ async function runCycle() {
   }
 
   for (const conn of autoConns) {
-    const blClient = new BlPublicClient(conn.id);
     console.log(`\n[worker] Processing: ${conn.name} (${conn.baseUrl})`);
     const checkedAt = new Date();
     try {
-      const s2Client = new Sub2ApiAdminClient(conn.baseUrl, decrypt(conn.adminApiKey));
-      const [changes, groupsList] = await Promise.all([
-        blClient.fetchChanges(undefined, 200),
-        s2Client.listGroups(),
-      ]);
-      const pendingChanges = latestChangesSince(changes, conn.lastCheckAt);
-
-      let accountsList: unknown[] | undefined;
-      let accountsError: string | null = null;
-      try {
-        accountsList = await s2Client.listAccounts();
-      } catch (error) {
-        accountsError = error instanceof Error ? error.message : String(error);
-        console.error(`  FAIL: account bound rules: ${accountsError}`);
-      }
-      const ruleResult = await applyBoundRateRules({
+      const ruleResult = await applyBoundRateRulesForConnection({
         db,
         connectionId: conn.id,
-        connectionName: conn.name,
-        blClient,
-        s2Client,
-        groups: groupsList,
-        accounts: accountsList,
-        accountsError,
+        cleanupBindings: false,
       });
-      const boundGroupIds = ruleResult.boundGroupIds;
-
-      if (pendingChanges.length === 0) {
-        console.log("  No new changes to sync");
-        await db.connection.update({ where: { id: conn.id }, data: { lastCheckAt: checkedAt } });
-        continue;
-      }
-
-      for (const change of pendingChanges) {
-        const target = findTargetGroup(change, groupsList);
-        const resolvedRateMultiplier = resolveBlChangeNewValue(change);
-        if (!target) {
-          const message = "No target group matched by id or name";
-          console.warn(`  SKIP: ${change.group_id}: ${message}`);
-          continue;
-        }
-        if (resolvedRateMultiplier === null) {
-          const message = "Invalid rate multiplier";
-          console.warn(`  SKIP: ${change.group_id}: ${message}`);
-          await logSync(conn.id, "auto_bl_sync_group_rate", `group:${target.id}`, { sourceGroupId: change.group_id, newValue: change.new_value }, "failed", message);
-          continue;
-        }
-        const rateMultiplier = normalizeRateMultiplier(resolvedRateMultiplier);
-        if (boundGroupIds.has(target.id)) {
-          console.log(`  SKIP: group ${target.name}: bound rule already applied`);
-          continue;
-        }
-        const currentRate = typeof target.rate_multiplier === "number" ? target.rate_multiplier : null;
-        if (currentRate !== null && sameRate(currentRate, rateMultiplier)) {
-          console.log(`  SKIP: group ${target.name} already ${rateMultiplier}`);
-          continue;
-        }
-
-        const detail = {
-          sourceSiteId: change.site_id,
-          sourceSiteName: change.site_name,
-          sourceGroupId: change.group_id,
-          sourceGroupName: change.group_name ?? "",
-          targetGroupId: target.id,
-          targetGroupName: target.name,
-          rateMultiplier,
-          rawRateMultiplier: change.new_value,
-          rechargeRatio: change.recharge_ratio,
-        };
-        try {
-          await s2Client.updateGroupRateMultiplier(target.id, rateMultiplier);
-          const changedAt = new Date(change.created_at);
-          await publishRateChangeAnnouncements({
-            db,
-            client: s2Client,
-            context: {
-              action: "auto_bl_sync_group_rate",
-              connectionId: conn.id,
-              connectionName: conn.name,
-              groupId: target.id,
-              groupName: target.name,
-              oldRate: currentRate,
-              newRate: rateMultiplier,
-              sourceSiteId: change.site_id,
-              sourceSiteName: change.site_name,
-              sourceGroupId: change.group_id,
-              sourceGroupName: change.group_name ?? "",
-              sourceRate: rateMultiplier,
-              changedAt: Number.isFinite(changedAt.getTime()) ? changedAt : new Date(),
-            },
-          });
-          await logSync(conn.id, "auto_bl_sync_group_rate", `group:${target.id}`, detail, "success");
-          console.log(`  OK: ${change.group_id}=${rateMultiplier} -> group ${target.name}`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`  FAIL: group ${target.name}: ${message}`);
-          await logSync(conn.id, "auto_bl_sync_group_rate", `group:${target.id}`, detail, "failed", message);
-        }
-      }
+      console.log(`  Rules: groups=${ruleResult.summary.appliedGroupRules}, accounts=${ruleResult.summary.appliedAccountRules}, priorities=${ruleResult.summary.appliedPriorityRules}, skipped=${ruleResult.summary.skippedGroupRules + ruleResult.summary.skippedAccountRules + ruleResult.summary.skippedPriorityRules}, failed=${ruleResult.summary.failedGroupRules + ruleResult.summary.failedAccountRules + ruleResult.summary.failedPriorityRules}`);
 
       await db.connection.update({ where: { id: conn.id }, data: { lastCheckAt: checkedAt } });
     } catch (error) {

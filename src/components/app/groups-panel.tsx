@@ -237,7 +237,13 @@ export function GroupsPanel({ connectionId }: { connectionId: number }) {
         const group = await createGroup.mutateAsync({ connectionId, name, rateMultiplier });
         groupId = group.id;
       } else if (formMode === "edit" && editGroup) {
-        await updateGroup.mutateAsync({ connectionId, groupId: editGroup.id, name, rateMultiplier });
+        const originalRateMultiplier = Number(editGroup.rate_multiplier ?? 1);
+        await updateGroup.mutateAsync({
+          connectionId,
+          groupId: editGroup.id,
+          name,
+          ...(rateMultiplier === originalRateMultiplier ? {} : { rateMultiplier }),
+        });
         groupId = editGroup.id;
       }
 

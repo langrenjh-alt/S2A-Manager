@@ -434,6 +434,20 @@ async function applyBoundGroupRules(input: {
         continue;
       }
 
+      const latestRule = await input.db.blGroupRateRule.findUnique({
+        where: { connectionId_groupId: { connectionId: input.connectionId, groupId: target.id } },
+        select: { enabled: true },
+      });
+      if (!latestRule?.enabled) {
+        await logSync(input.db, input.connectionId, "auto_bl_bound_group_rule", `group:${target.id}`, {
+          ...detail,
+          skipped: true,
+          reason: "rate rule was disabled before the remote update",
+        }, "success");
+        summary.skippedGroupRules += 1;
+        continue;
+      }
+
       await input.s2Client.updateGroupRateMultiplier(target.id, rateMultiplier);
       const firstSource = sources[0];
       await publishRateChangeAnnouncements({

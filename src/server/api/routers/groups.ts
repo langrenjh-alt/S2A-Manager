@@ -64,30 +64,35 @@ export const groupsRouter = createTRPCRouter({
       connectionId: z.number().int().positive(),
       groupId: z.number().int().positive(),
       name: groupNameInput,
-      rateMultiplier: rateMultiplierInput,
+      rateMultiplier: rateMultiplierInput.optional(),
     }))
     .mutation(async ({ input }) => {
       const conn = await getConnection(input.connectionId);
-      const rateMultiplier = normalizeRateMultiplier(input.rateMultiplier);
+      const rateMultiplier = input.rateMultiplier === undefined ? undefined : normalizeRateMultiplier(input.rateMultiplier);
       const detail = { groupId: input.groupId, name: input.name, rateMultiplier };
       try {
         const client = getClient(conn);
-        const oldGroup = await client.getGroup(input.groupId);
-        const group = await client.updateGroup(input.groupId, { name: input.name, rate_multiplier: rateMultiplier });
-        await publishRateChangeAnnouncements({
-          db,
-          client,
-          context: {
-            action: "manual_group_update",
-            connectionId: input.connectionId,
-            connectionName: conn.name,
-            groupId: input.groupId,
-            groupName: group.name ?? input.name,
-            oldRate: oldGroup.rate_multiplier ?? null,
-            newRate: rateMultiplier,
-            changedAt: new Date(),
-          },
+        const oldGroup = rateMultiplier === undefined ? null : await client.getGroup(input.groupId);
+        const group = await client.updateGroup(input.groupId, {
+          name: input.name,
+          ...(rateMultiplier === undefined ? {} : { rate_multiplier: rateMultiplier }),
         });
+        if (rateMultiplier !== undefined && oldGroup) {
+          await publishRateChangeAnnouncements({
+            db,
+            client,
+            context: {
+              action: "manual_group_update",
+              connectionId: input.connectionId,
+              connectionName: conn.name,
+              groupId: input.groupId,
+              groupName: group.name ?? input.name,
+              oldRate: oldGroup.rate_multiplier ?? null,
+              newRate: rateMultiplier,
+              changedAt: new Date(),
+            },
+          });
+        }
         await safeLogSync(input.connectionId, "update_group", `group:${input.groupId}`, detail, "success");
         return group;
       } catch (error) {
