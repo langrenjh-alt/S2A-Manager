@@ -1,10 +1,18 @@
-# S2A Manager
+# S2A Manager（已归档）
+
+> [!IMPORTANT]
+> ### 后续版本已迁移至 S2A Manager2
+>
+> 本仓库已停止维护，仅作为旧版本存档。最新代码、文档与后续更新请前往：
+>
+> **[前往新仓库：langrenjh-alt/S2A-Manager2](https://github.com/langrenjh-alt/S2A-Manager2)**
 
 S2A Manager 是一个面向 Sub2API 站点的运维管理面板，用来集中管理多个 Sub2API 后台连接、分组倍率、账号调度、倍率采集、上游可用性检测、公告和任务日志。
 
 它不是 Sub2API 本体的替代品，而是站长日常维护 Sub2API 的辅助工具。项目重点解决长期运营中容易反复出现的问题：倍率频繁调整、上游账号不稳定、采集源倍率变化、分组或账号重建后绑定失效、自动化任务不可见、日志和历史残留难排查等。
 
-- 项目仓库：[langrenjh-alt/S2A-Manager](https://github.com/langrenjh-alt/S2A-Manager)
+- 当前项目：[S2A Manager2](https://github.com/langrenjh-alt/S2A-Manager2)
+- 归档仓库：[langrenjh-alt/S2A-Manager](https://github.com/langrenjh-alt/S2A-Manager)
 - 参考中转站：[https://z30.top](https://z30.top)
 - 使用说明：[使用说明.md](./使用说明.md)
 - Ubuntu 部署：[部署指南.md](./部署指南.md)
